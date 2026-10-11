@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=mailmind_user
+      - POSTGRES_PASSWORD=mailmind_password
+      - POSTGRES_DB=mailmind_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - mailmind_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mailmind_user -d mailmind_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mailmind_db_data:

@@ -1,0 +1,307 @@
+// MailMind (ออกแบบใหม่) — ร่าง Schema รอบที่ 1
+// สถานะ: ร่างสำหรับทบทวน ยังไม่ได้สร้าง migration
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────── Enums ─────────────
+
+enum MailProvider {
+  GOOGLE
+  MICROSOFT // รอบสอง
+}
+
+enum AccountStatus {
+  ACTIVE
+  NEEDS_REAUTH // token หมดอายุหรือถูกเพิกถอน ต้องให้ผู้ใช้เชื่อมใหม่
+  DISABLED
+}
+
+enum EmailCategory {
+  APPOINTMENT // นัดหมาย / เลื่อนนัด
+  TASK_DEADLINE // กำหนดส่ง / งานที่ต้องทำ
+  INFO_REQUEST // ขอข้อมูลหรือเอกสาร
+  FYI // แจ้งเพื่อทราบ
+  BOOKING_TRAVEL // ยืนยันการจองและการเดินทาง
+  EVENT_INVITATION // เชิญเข้าร่วมสัมมนา / ฝึกอบรม
+  OTHER
+}
+
+enum Priority {
+  HIGH
+  NORMAL
+  LOW
+}
+
+enum AnalysisStatus {
+  PENDING // รอวิเคราะห์
+  PROCESSING // worker จองไว้แล้ว
+  DONE
+  FAILED // AI ล้มเหลวหรือผลลัพธ์ไม่ผ่าน schema — แสดงให้ผู้ใช้เห็นและกดลองใหม่ได้
+  SKIPPED // ข้ามด้วยกฎ (เช่น โปรโมชัน) ไม่ได้เรียก AI
+}
+
+enum ActionKind {
+  EVENT // มีเวลาเริ่ม–สิ้นสุด (ประชุม สัมมนา เที่ยวบิน)
+  DEADLINE // มีกำหนดส่ง ไม่ใช่ช่วงเวลาที่ต้องเข้าร่วม
+}
+
+enum Availability {
+  NOT_CHECKED
+  AVAILABLE
+  CONFLICT
+  OUT_OF_WORKING_HOURS
+  OUT_OF_WORK_DAYS
+}
+
+enum ActionStatus {
+  SUGGESTED // AI เสนอ รอผู้ใช้ยืนยัน
+  CREATING // กำลังเรียก Calendar API (ใช้เป็นตัวล็อกกันกดซ้ำ)
+  CREATED
+  FAILED
+  DISMISSED
+}
+
+enum ReplyIntent {
+  ACCEPT // ตอบรับนัด/คำเชิญ
+  PROPOSE_TIME // เสนอเวลาอื่น
+  DECLINE
+  ANSWER // ตอบคำขอข้อมูล
+  ACKNOWLEDGE // รับทราบ
+}
+
+enum DraftSource {
+  AI
+  USER
+}
+
+enum DraftStatus {
+  PENDING
+  SENDING // กำลังเรียก API ส่งเมล (ใช้เป็นตัวล็อกกันส่งซ้ำ)
+  SENT
+  FAILED
+  DISCARDED
+}
+
+enum SummaryType {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+// ───────────── ผู้ใช้และการตั้งค่า ─────────────
+
+// ตัวตนสำหรับเข้าสู่ระบบ แยกจากบัญชีอีเมลที่เชื่อม (MailAccount)
+model User {
+  id      String  @id @default(cuid())
+  email   String  @unique
+  name    String?
+  picture String?
+
+  setting       UserSetting?
+  mailAccounts  MailAccount[]
+  aiCredentials AiCredential[]
+  summaries     Summary[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model UserSetting {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // AI
+  isAutoAnalyzeActive Boolean @default(true)
+  aiProvider          String  @default("ollama") // ollama | openai | openrouter | gemini | ...
+  aiModel             String?
+  // ไม่มีการสลับผู้ให้บริการอัตโนมัติ: ถ้า provider ที่เลือกล้มเหลว เมลจะเป็น FAILED
+
+  // เวลาทำงาน
+  startTime String   @default("09:00")
+  endTime   String   @default("17:00")
+  workDays  String[] @default(["mon", "tue", "wed", "thu", "fri"])
+  timezone  String   @default("Asia/Bangkok") // ชื่อ IANA
+
+  // ข้อมูลสำหรับร่างตอบกลับ
+  firstName String?
+  lastName  String?
+  gender    String?
+  position  String?
+  signature String?
+  tone      String  @default("formal")
+
+  theme String @default("light")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// API key ของ Cloud AI ต่อผู้ให้บริการ (Ollama ไม่ต้องมีแถว)
+model AiCredential {
+  id       String @id @default(cuid())
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider String
+
+  encryptedKey String @db.Text // รูปแบบ enc:v1:<iv>:<authTag>:<data> เหมือน token
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, provider])
+}
+
+// ───────────── บัญชีอีเมลและอีเมล ─────────────
+
+model MailAccount {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  provider          MailProvider
+  providerAccountId String // Google sub / Microsoft oid
+  emailAddress      String
+
+  accessToken  String?       @db.Text // เข้ารหัส
+  refreshToken String?       @db.Text // เข้ารหัส
+  status       AccountStatus @default(ACTIVE)
+
+  // จุดเริ่มของการซิงก์ครั้งถัดไป เลื่อนเฉพาะเมื่อดึงครบทุกหน้าแล้ว
+  syncCursor    DateTime?
+  lastSyncAt    DateTime?
+  lastSyncError String?
+
+  emails EmailMessage[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+// อีเมลหนึ่งฉบับ + ผลวิเคราะห์ของ AI
+// เก็บเฉพาะ metadata และ snippet; เนื้อหาเต็มดึงจากผู้ให้บริการเมื่อผู้ใช้เปิดอ่าน
+model EmailMessage {
+  id            String      @id @default(cuid())
+  mailAccountId String
+  mailAccount   MailAccount @relation(fields: [mailAccountId], references: [id], onDelete: Cascade)
+
+  providerMessageId String
+  providerThreadId  String
+  fromName          String?
+  fromAddress       String?
+  subject           String?
+  snippet           String?  @db.Text
+  receivedAt        DateTime
+  isRead            Boolean  @default(false)
+
+  // สถานะการวิเคราะห์ (ตารางนี้ทำหน้าที่เป็นคิวงานด้วย)
+  analysisStatus   AnalysisStatus @default(PENDING)
+  analysisAttempts Int            @default(0)
+  analysisError    String?
+  analyzedAt       DateTime?
+  aiProvider       String?
+  aiModel          String?
+
+  // ผลจาก AI
+  category   EmailCategory?
+  priority   Priority       @default(NORMAL)
+  summary    String?        @db.Text
+  needsReply Boolean        @default(false)
+
+  // ผู้ใช้แก้ประเภทเอง (เก็บแยกเพื่อวัดความถูกต้องของ AI)
+  userCategory EmailCategory?
+
+  actionItems ActionItem[]
+  replyDraft  ReplyDraft?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([mailAccountId, providerMessageId])
+  @@index([mailAccountId, receivedAt])
+  @@index([mailAccountId, category])
+  @@index([analysisStatus])
+  @@index([providerThreadId])
+}
+
+// สิ่งที่ลงปฏิทินได้ซึ่งสกัดจากอีเมล (อีเมลหนึ่งฉบับมีได้หลายรายการ)
+model ActionItem {
+  id      String       @id @default(cuid())
+  emailId String
+  email   EmailMessage @relation(fields: [emailId], references: [id], onDelete: Cascade)
+
+  kind            ActionKind
+  title           String
+  startAt         DateTime?
+  endAt           DateTime?
+  isAllDay        Boolean    @default(false)
+  isTimeSpecified Boolean    @default(false)
+  location        String?
+
+  evidence      String?  @db.Text // ข้อความต้นทางในอีเมลที่ใช้เป็นหลักฐาน
+  missingFields String[] @default([]) // เช่น ["time", "location"] ให้ผู้ใช้เติมแทนการเดา
+
+  // ผลตรวจตารางด้วยกฎ (ไม่ใช่ LLM)
+  availability       Availability @default(NOT_CHECKED)
+  availabilityReason String?
+  suggestedSlots     Json? // [{ start, end }] เมื่อไม่ว่าง
+
+  status          ActionStatus @default(SUGGESTED)
+  externalEventId String? // id ของกิจกรรมในปฏิทินปลายทาง
+  externalLink    String?
+  errorMessage    String?
+  createdEventAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([emailId])
+  @@index([status])
+}
+
+// ร่างตอบกลับ หนึ่งร่างต่ออีเมล (สร้างใหม่ = เขียนทับแถวเดิม)
+model ReplyDraft {
+  id      String       @id @default(cuid())
+  emailId String       @unique
+  email   EmailMessage @relation(fields: [emailId], references: [id], onDelete: Cascade)
+
+  intent ReplyIntent
+  body   String      @db.Text
+  source DraftSource @default(AI)
+
+  status            DraftStatus @default(PENDING)
+  sentAt            DateTime?
+  providerMessageId String? // id ของข้อความที่ส่งออก
+  errorMessage      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+}
+
+// ───────────── สรุป ─────────────
+
+model Summary {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type        SummaryType
+  periodStart DateTime
+  periodEnd   DateTime
+  content     String      @db.Text
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, type, periodStart, periodEnd])
+}
