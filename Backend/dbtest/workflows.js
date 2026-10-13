@@ -42,6 +42,13 @@ const fake = {
   events: [], // ปฏิทินของผู้ใช้
   created: new Map(), // idempotencyKey -> event
   calendarInserts: 0,
+  calendarUpdates: [],
+  // การเปลี่ยนแปลงฝั่งผู้ให้บริการที่รอให้ระบบมาอ่าน (null = cursor หมดอายุ)
+  historyId: 100,
+  pendingChanges: { removedIds: [], restoredIds: [], readIds: [], unreadIds: [] },
+  historyExpired: false,
+  trashIds: [],
+  changeCalls: 0,
   aiCalls: [],
   failMetaFor: null,
   failSend: false,
@@ -98,13 +105,45 @@ const mail = {
     return { id: `sent-${fake.sent.length}` };
   },
   async markRead() {},
+  async getChangeCursor() {
+    return String(fake.historyId);
+  },
+  async getChanges({ cursor }) {
+    fake.changeCalls += 1;
+    if (fake.historyExpired) {
+      fake.historyExpired = false;
+      return { cursor: null, removedIds: [], restoredIds: [], readIds: [], unreadIds: [], expired: true };
+    }
+    assert.equal(cursor, String(fake.historyId)); // ระบบต้องส่งตำแหน่งล่าสุดที่เก็บไว้กลับมา
+    const changes = fake.pendingChanges;
+    fake.pendingChanges = { removedIds: [], restoredIds: [], readIds: [], unreadIds: [] };
+    fake.historyId += 1;
+    return { cursor: String(fake.historyId), ...changes, expired: false };
+  },
+  async listRemovedIds() {
+    return fake.trashIds;
+  },
 };
 
 const calendar = {
   provider: 'GOOGLE',
   async listEvents() {
     if (fake.failCalendar) throw new Error('calendar api down');
-    return [...fake.events, ...fake.created.values()];
+    const expanded = [...fake.created.values()].flatMap((e) =>
+      Array.from({ length: e.isAllDay ? 1 : e._input.repeatDays || 1 }, (_unused, i) =>
+        i === 0 && !(e._input.repeatDays > 1)
+          ? e
+          : { ...e, id: `${e.id}_${i}`, recurringEventId: e.id, start: iso(new Date(new Date(e.start).getTime() + i * 86400000)), end: iso(new Date(new Date(e.end).getTime() + i * 86400000)) }
+      )
+    );
+    return [...fake.events, ...expanded];
+  },
+  async updateEvent(input) {
+    if (fake.failCalendar) throw new Error('calendar api down');
+    fake.calendarUpdates.push(input);
+    const event = [...fake.created.values()].find((e) => e.id === input.eventId);
+    if (event) Object.assign(event, { start: iso(new Date(input.start)), end: iso(new Date(input.end)), isAllDay: input.isAllDay, _input: { ...event._input, repeatDays: input.repeatDays } });
+    return { id: input.eventId, htmlLink: 'http://cal/x' };
   },
   async createEvent(input) {
     await sleep(20);
@@ -120,7 +159,48 @@ const calendar = {
 };
 
 // AI จำลอง: ตอบตามหัวข้ออีเมลที่อยู่ใน prompt
+const dayAfterMonday = (days, hour) => new Date(nextMonday(hour).getTime() + days * 24 * 60 * 60 * 1000);
+
+const todayParts = () => {
+  const p = time.zonedParts(new Date(), TZ);
+  return { year: p.year, month: p.month, day: p.day };
+};
+// ช่วงสามวันที่เริ่มอีก 20 วันข้างหน้า พร้อมข้อความแบบ dd/mm/พ.ศ. - dd/mm/พ.ศ.
+const tripRange = () => {
+  const start = time.addZonedDays(time.startOfZonedDay(new Date(), TZ), 20, TZ);
+  const end = time.addZonedDays(start, 2, TZ);
+  const fmt = (d) => {
+    const p = time.zonedParts(d, TZ);
+    return `${p.day}/${p.month}/${p.year + 543}`;
+  };
+  return { start, end, text: `วันที่ ${fmt(start)} - ${fmt(end)} ไปเที่ยวภูหลายวันกันไหม` };
+};
+
+// วันจันทร์ถัดไปอีกสามสัปดาห์ + n วัน เวลา hour:00 (วันทำงาน ไม่ชนกับ test อื่น)
+const fieldDay = (offsetDays, hour) => new Date(nextMonday(hour).getTime() + (21 + offsetDays) * 24 * 60 * 60 * 1000);
+
+const scriptedThreadAnalysis = (prompt) => {
+  const appointment = (item) => ({ category: 'APPOINTMENT', priority: 'NORMAL', summary: 'เธรดทดสอบ', needsReply: false, replyIntent: null, actionItems: [item] });
+  const event = (fields) => ({ kind: 'EVENT', isAllDay: false, isTimeSpecified: true, end: null, evidence: null, ...fields });
+  // ลงพื้นที่สองวัน เวลา 09:00–15:00: โมเดลให้วันแรก 09:00 ถึงวันสุดท้าย 15:00 (เหมือนที่โมเดลจริงทำ)
+  if (prompt.includes('ลงพื้นที่เก็บข้อมูลสองวัน')) return appointment(event({ title: 'นัดลงพื้นที่เก็บข้อมูล', start: iso(fieldDay(0, 9)), end: iso(fieldDay(1, 15)), evidence: 'เวลา 09.00 - 15.00 ทั้ง 2 วัน' }));
+  // ทริปสามวัน: โมเดลสกัดมาแค่วันแรกพร้อมเวลา 00:00 (เหมือนที่โมเดลจริงทำ)
+  if (prompt.includes('เตรียมของมาให้พร้อม')) return appointment(event({ title: 'นัดรวมตัว', start: iso(time.zonedToUtc({ ...todayParts(), hour: 5 }, TZ)), location: 'หน้ามหาลัย' }));
+  if (prompt.includes('ไปเที่ยวภูหลายวัน')) return appointment(event({ title: 'ไปเที่ยวภูหลายวัน', start: iso(tripRange().start), evidence: tripRange().text }));
+  // ทริป: ฉบับตอบกลับบอกเวลานัดพบในวันเดียวกัน (AI ไม่ได้บอกว่าเกี่ยวข้อง — ต้องผูกด้วยกฎ)
+  if (prompt.includes('เจอกันที่หอตีสอง')) return appointment(event({ title: 'ออกเดินทาง - นัดเจอที่หอ', start: iso(dayAfterMonday(7, 2)), location: 'หอ' }));
+  if (prompt.includes('ไปเที่ยวภูทดสอบ')) return appointment(event({ title: 'ไปเที่ยวภูทดสอบ', start: iso(time.startOfZonedDay(dayAfterMonday(7, 10), TZ)), isAllDay: true, isTimeSpecified: false }));
+  // เลื่อนนัด: AI ไม่ได้บอกความสัมพันธ์ (โมเดลเล็กมักไม่บอก) — ต้องผูกด้วยคำว่า "เลื่อน" ในข้อความล่าสุด
+  if (prompt.includes('ขอเลื่อนเป็นวันพุธบ่ายสาม')) return appointment(event({ title: 'ประชุมงบประมาณ', start: iso(dayAfterMonday(9, 15)), end: iso(dayAfterMonday(9, 16)) }));
+  // ยืนยันซ้ำ: เวลาเดิมทุกประการ
+  if (prompt.includes('ยืนยันตามเวลาเดิมนะครับ')) return appointment(event({ title: 'ประชุมงบประมาณ (ยืนยัน)', start: iso(dayAfterMonday(8, 14)), end: iso(dayAfterMonday(8, 15)) }));
+  if (prompt.includes('นัดประชุมงบประมาณ')) return appointment(event({ title: 'ประชุมงบประมาณ', start: iso(dayAfterMonday(8, 14)), end: iso(dayAfterMonday(8, 15)) }));
+  return null;
+};
+
 const scriptedAnalysis = (prompt) => {
+  const threadResult = scriptedThreadAnalysis(prompt);
+  if (threadResult) return threadResult;
   const start = nextMonday(10);
   const end = nextMonday(11, 30);
   if (prompt.includes('นัดประชุมโครงการ')) {
@@ -195,7 +275,8 @@ const api = async (path, { method = 'GET', body, token } = {}) => {
 test.before(async () => {
   assert.ok(env.databaseUrl, 'DATABASE_URL is required');
   user = await prisma.user.create({
-    data: { email: `dbtest-${RUN}@example.com`, name: 'DB Test', setting: { create: { timezone: TZ, gender: 'MALE', firstName: 'ทดสอบ' } } },
+    // ปิดวิเคราะห์อัตโนมัติ: ถ้ามีเซิร์ฟเวอร์จริงรันอยู่บนฐานข้อมูลเดียวกัน งานของเซิร์ฟเวอร์นั้นจะไม่มาแย่งอีเมลทดสอบไปวิเคราะห์
+    data: { email: `dbtest-${RUN}@example.com`, name: 'DB Test', setting: { create: { timezone: TZ, gender: 'MALE', firstName: 'ทดสอบ', isAutoAnalyzeActive: false } } },
   });
   otherUser = await prisma.user.create({ data: { email: `dbtest-other-${RUN}@example.com`, setting: { create: {} } } });
   account = await prisma.mailAccount.create({
@@ -528,4 +609,236 @@ test('http: manual draft, AI settings guard, and API key storage', async () => {
   await api('/api/settings/ai/keys/openai', { method: 'DELETE' });
   const final = (await api('/api/settings')).json;
   assert.deepEqual([final.setting.aiProvider, final.setting.aiModel], ['ollama', null]);
+});
+
+// ───────── เธรด: ผูกรายการใหม่กับรายการเดิม ─────────
+const addThreadMessage = async (id, threadId, subject, text) => {
+  addMessage(id, { subject, text, threadId });
+  await sleep(5); // ให้เวลารับของแต่ละฉบับต่างกัน
+  await syncAccount(account.id);
+  const row = await emailRow(id);
+  await analyzeEmail(row.id);
+  return emailRow(id);
+};
+
+test('thread: a same-day detail is linked by rule, checked for conflicts only, and can be added as its own event', async () => {
+  const first = await addThreadMessage(`${RUN}-trip1`, `t-${RUN}-trip`, 'ไปเที่ยวภูทดสอบ', 'ชวนไปเที่ยวภูทดสอบวันจันทร์ถัดไป ทั้งวัน');
+  const [trip] = first.actionItems;
+  assert.deepEqual([trip.isAllDay, trip.relatedActionId], [true, null]);
+  await confirmActionItem(user.id, trip.id, {});
+
+  fake.aiCalls.length = 0;
+  const reply = await addThreadMessage(`${RUN}-trip2`, `t-${RUN}-trip`, 'Re: ไปเที่ยวภูทดสอบ', 'เจอกันที่หอตีสอง เดี๋ยวไปรับ');
+  assert.match(fake.aiCalls[0], /ITEMS ALREADY RECORDED[\s\S]*#1 EVENT "ไปเที่ยวภูทดสอบ"/);
+
+  const [detail] = reply.actionItems;
+  assert.deepEqual([detail.relatedActionId, detail.relation, detail.title], [trip.id, 'DETAIL', 'ออกเดินทาง - นัดเจอที่หอ']);
+  // ตีสองอยู่นอกเวลาทำงาน แต่รายการที่ผูกแล้วตรวจแค่การชน และไม่เสนอเวลาอื่น
+  assert.deepEqual([detail.availability, detail.suggestedSlots], ['AVAILABLE', null]);
+
+  const inserts = fake.calendarInserts;
+  const done = await confirmActionItem(user.id, detail.id, { mode: 'CREATE' });
+  assert.deepEqual([done.status, done.relatedAction.id], ['CREATED', trip.id]);
+  assert.equal(fake.calendarInserts, inserts + 1);
+  assert.equal(fake.calendarUpdates.length, 0);
+  const tripAfter = await prisma.actionItem.findUnique({ where: { id: trip.id } });
+  assert.deepEqual([tripAfter.status, tripAfter.isAllDay], ['CREATED', true]); // กิจกรรมเดิมไม่ถูกแตะ
+});
+
+test('thread: an explicit reschedule updates the original event instead of creating a second one', async () => {
+  const first = await addThreadMessage(`${RUN}-bud1`, `t-${RUN}-bud`, 'นัดประชุมงบประมาณ', 'ขอนัดประชุมงบประมาณวันอังคารบ่ายสอง');
+  const [meeting] = first.actionItems;
+  await confirmActionItem(user.id, meeting.id, {});
+  const eventId = (await prisma.actionItem.findUnique({ where: { id: meeting.id } })).externalEventId;
+
+  // ฉบับยืนยันเวลาเดิม: ไม่เกิดรายการซ้ำ
+  const same = await addThreadMessage(`${RUN}-bud2`, `t-${RUN}-bud`, 'Re: นัดประชุมงบประมาณ', 'ยืนยันตามเวลาเดิมนะครับ');
+  assert.equal(same.actionItems.length, 0);
+
+  const reply = await addThreadMessage(`${RUN}-bud3`, `t-${RUN}-bud`, 'Re: นัดประชุมงบประมาณ', 'ขอเลื่อนเป็นวันพุธบ่ายสาม');
+  const [moved] = reply.actionItems;
+  assert.deepEqual([moved.relatedActionId, moved.relation], [meeting.id, 'RESCHEDULE']);
+
+  const inserts = fake.calendarInserts;
+  const results = await Promise.allSettled([
+    confirmActionItem(user.id, moved.id, { mode: 'UPDATE_RELATED' }),
+    confirmActionItem(user.id, moved.id, { mode: 'UPDATE_RELATED' }),
+  ]);
+  assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
+  assert.equal(fake.calendarInserts, inserts); // ไม่มีกิจกรรมใหม่
+  assert.equal(fake.calendarUpdates.length, 1);
+  assert.deepEqual([fake.calendarUpdates[0].eventId, iso(new Date(fake.calendarUpdates[0].start))], [eventId, iso(moved.startAt)]);
+
+  const after = await prisma.actionItem.findMany({ where: { id: { in: [meeting.id, moved.id] } } });
+  const original = after.find((a) => a.id === meeting.id);
+  const merged = after.find((a) => a.id === moved.id);
+  assert.deepEqual([original.status, iso(original.startAt), original.title], ['CREATED', iso(moved.startAt), 'ประชุมงบประมาณ']);
+  assert.equal(merged.status, 'MERGED');
+  await assert.rejects(() => confirmActionItem(user.id, moved.id, { mode: 'CREATE' }), { code: 'ACTION_NOT_CONFIRMABLE' });
+
+  const detail = await api(`/api/emails/${reply.id}`);
+  assert.deepEqual([detail.json.actionItems[0].status, detail.json.actionItems[0].related.title, detail.json.createdActions], ['MERGED', 'ประชุมงบประมาณ', 1]);
+});
+
+test('thread: updating a related item that is not on the calendar yet changes only the stored suggestion', async () => {
+  const first = await addThreadMessage(`${RUN}-bud4`, `t-${RUN}-bud-b`, 'นัดประชุมงบประมาณ', 'ขอนัดประชุมงบประมาณวันอังคารบ่ายสอง (รอบสอง)');
+  const [pending] = first.actionItems; // ยังไม่ยืนยัน
+  const reply = await addThreadMessage(`${RUN}-bud5`, `t-${RUN}-bud-b`, 'Re: นัดประชุมงบประมาณ', 'ขอเลื่อนเป็นวันพุธบ่ายสาม');
+  const [moved] = reply.actionItems;
+  assert.equal(moved.relation, 'RESCHEDULE');
+
+  const updates = fake.calendarUpdates.length;
+  await confirmActionItem(user.id, moved.id, { mode: 'UPDATE_RELATED', force: true });
+  assert.equal(fake.calendarUpdates.length, updates); // ไม่มีอะไรในปฏิทินให้แก้
+  const original = await prisma.actionItem.findUnique({ where: { id: pending.id } });
+  assert.deepEqual([original.status, iso(original.startAt)], ['SUGGESTED', iso(moved.startAt)]);
+
+  await assert.rejects(() => confirmActionItem(user.id, pending.id, { mode: 'UPDATE_RELATED' }), { status: 400 }); // ไม่ได้ผูกกับรายการใด
+});
+
+test('thread: the job analyses earlier messages of a thread first, so a newer reply can link to them', async () => {
+  addMessage(`${RUN}-trip3`, { subject: 'ไปเที่ยวภูทดสอบ', text: 'ชวนไปเที่ยวภูทดสอบวันจันทร์ถัดไป ทั้งวัน (รอบสาม)', threadId: `t-${RUN}-trip-c` });
+  await sleep(5);
+  addMessage(`${RUN}-trip4`, { subject: 'Re: ไปเที่ยวภูทดสอบ', text: 'เจอกันที่หอตีสอง เดี๋ยวไปรับ', threadId: `t-${RUN}-trip-c` });
+  await syncAccount(account.id);
+
+  await runAnalyzeJob(undefined, { accountIds: [account.id] }); // หยิบฉบับใหม่สุดก่อน
+  const original = await emailRow(`${RUN}-trip3`);
+  const reply = await emailRow(`${RUN}-trip4`);
+  assert.deepEqual([original.analysisStatus, reply.analysisStatus], ['DONE', 'DONE']);
+  assert.ok(original.analyzedAt <= reply.analyzedAt);
+  assert.deepEqual([reply.actionItems[0].relatedActionId, reply.actionItems[0].relation], [original.actionItems[0].id, 'DETAIL']);
+});
+
+test('thread: a multi-day trip is stored as one all-day range, and a later time-only reply lands on its first day', async () => {
+  const range = tripRange();
+  const first = await addThreadMessage(`${RUN}-multi1`, `t-${RUN}-multi`, 'นัดไปเที่ยวภูหลายวัน', range.text);
+  const [trip] = first.actionItems;
+  assert.deepEqual([trip.isAllDay, trip.isTimeSpecified, iso(trip.startAt), iso(trip.endAt)], [true, false, iso(range.start), iso(range.end)]);
+
+  const done = await confirmActionItem(user.id, trip.id, {});
+  const created = fake.created.get(trip.id);
+  assert.deepEqual([done.status, created.isAllDay, created.start, created.end], ['CREATED', true, iso(range.start), iso(range.end)]);
+
+  // ฉบับตอบกลับบอกแค่ "05.00" — โมเดลใส่วันนี้มา ระบบต้องย้ายไปวันแรกของทริปและผูกเป็นรายละเอียดเพิ่ม
+  const reply = await addThreadMessage(`${RUN}-multi2`, `t-${RUN}-multi`, 'Re: นัดไปเที่ยวภูหลายวัน', 'นัดรวมตัว 05.00 ที่หน้ามหาลัย นะ เตรียมของมาให้พร้อม');
+  const [meet] = reply.actionItems;
+  const expectedStart = new Date(range.start.getTime() + 5 * 60 * 60 * 1000);
+  assert.deepEqual([iso(meet.startAt), meet.relatedActionId, meet.relation], [iso(expectedStart), trip.id, 'DETAIL']);
+  assert.ok(meet.missingFields.includes('date')); // ติดธงให้ผู้ใช้ตรวจวัน
+  assert.equal(meet.availability, 'AVAILABLE'); // ทริปทั้งวันของตัวเองไม่นับว่าชน
+});
+
+// ───────── ตามการลบฝั่งผู้ให้บริการ ─────────
+test('provider changes: mail deleted or trashed outside the app disappears from the inbox but keeps its history', async () => {
+  const appt = await emailRow(`${RUN}-appt`); // ตอบแล้วและลงปฏิทินแล้ว
+  const fyi = await emailRow(`${RUN}-fyi`);
+  const before = (await api('/api/emails/counts')).json.total;
+  const statsBefore = (await api('/api/summary/stats?days=7')).json;
+
+  // รอบแรกหลังเปิดใช้ (บัญชีที่ยังไม่มีตำแหน่ง): ตั้งจุดเริ่ม แล้วตรวจย้อนหลังจากถังขยะ
+  await prisma.mailAccount.update({ where: { id: account.id }, data: { changeCursor: null } });
+  fake.trashIds = [fyi.providerMessageId, 'unknown-message'];
+  const calls = fake.changeCalls;
+  const first = await syncAccount(account.id);
+  assert.deepEqual([first.removed, fake.changeCalls], [1, calls]); // ยังไม่มี cursor จึงไม่ได้ถาม history
+  assert.equal((await prisma.mailAccount.findUnique({ where: { id: account.id } })).changeCursor, String(fake.historyId));
+
+  // รอบถัดไป: หนึ่งคำขอ ได้ทั้งรายการที่ถูกลบและสถานะอ่านแล้ว
+  const late2 = await emailRow(`${RUN}-late2`);
+  fake.pendingChanges = { removedIds: [appt.providerMessageId], restoredIds: [], readIds: [late2.providerMessageId], unreadIds: [] };
+  const second = await syncAccount(account.id);
+  assert.deepEqual([second.removed, second.readChanged, fake.changeCalls], [1, 1, calls + 1]);
+  assert.equal((await emailRow(`${RUN}-late2`)).isRead, true);
+
+  const list = (await api('/api/emails?limit=100')).json.items.map((e) => e.id);
+  assert.equal(list.includes(appt.id) || list.includes(fyi.id), false);
+  assert.equal((await api('/api/emails/counts')).json.total, before - 2);
+  assert.equal((await api('/api/emails?category=APPOINTMENT&limit=100')).json.items.some((e) => e.id === appt.id), false);
+
+  // ประวัติยังอยู่: ร่างที่ส่งแล้ว รายการที่ลงปฏิทินแล้ว และสถิติ
+  const kept = await emailRow(`${RUN}-appt`);
+  assert.ok(kept.removedAt);
+  assert.equal(kept.replyDraft.status, 'SENT');
+  const statsAfter = (await api('/api/summary/stats?days=7')).json;
+  assert.deepEqual([statsAfter.emails.total, statsAfter.drafts.sent, statsAfter.actions.created], [statsBefore.emails.total, statsBefore.drafts.sent, statsBefore.actions.created]);
+  const detail = (await api(`/api/emails/${appt.id}`)).json;
+  assert.match(detail.threadError, /ถูกลบ/);
+});
+
+test('provider changes: a removed email is not analysed, a restored one comes back, and an expired cursor falls back safely', async () => {
+  addMessage(`${RUN}-gone`, { subject: 'ประกาศ 9', text: 'แจ้งเพื่อทราบ' });
+  await syncAccount(account.id);
+  const gone = await emailRow(`${RUN}-gone`);
+  fake.pendingChanges.removedIds = [gone.providerMessageId];
+  await syncAccount(account.id);
+  await runAnalyzeJob(undefined, { accountIds: [account.id] });
+  assert.equal((await emailRow(`${RUN}-gone`)).analysisStatus, 'PENDING'); // ถูกซ่อนอยู่ จึงไม่เสีย AI
+
+  // กู้คืนจากถังขยะ: กลับมาในรายการและถูกวิเคราะห์ตามปกติ
+  fake.pendingChanges.restoredIds = [gone.providerMessageId];
+  const restored = await syncAccount(account.id);
+  assert.equal(restored.restored, 1);
+  assert.equal((await emailRow(`${RUN}-gone`)).removedAt, null);
+  await runAnalyzeJob(undefined, { accountIds: [account.id] });
+  assert.equal((await emailRow(`${RUN}-gone`)).analysisStatus, 'DONE');
+
+  // cursor หมดอายุ: ตั้งจุดเริ่มใหม่และใช้ถังขยะแทน ไม่ทำให้ซิงก์ล้ม
+  fake.historyExpired = true;
+  fake.historyId = 500;
+  fake.trashIds = [gone.providerMessageId];
+  const fallback = await syncAccount(account.id);
+  assert.deepEqual([fallback.status, fallback.removed], ['completed', 1]);
+  assert.equal((await prisma.mailAccount.findUnique({ where: { id: account.id } })).changeCursor, '500');
+
+  // อ่านการเปลี่ยนแปลงไม่ได้: อีเมลใหม่ยังเข้า และตำแหน่งเดิมคงไว้
+  addMessage(`${RUN}-new-after`, { subject: 'ประกาศ 10', text: 'แจ้งเพื่อทราบ' });
+  const original = mail.getChanges;
+  mail.getChanges = async () => { throw new Error('history api down'); };
+  const partial = await syncAccount(account.id);
+  mail.getChanges = original;
+  assert.deepEqual([partial.status, partial.created, partial.removed], ['completed', 1, 0]);
+  assert.equal((await prisma.mailAccount.findUnique({ where: { id: account.id } })).changeCursor, '500');
+});
+
+test('multi-day with hours: stored as a daily repeat, every day checked, and saved as one recurring event', async () => {
+  const email = await addThreadMessage(`${RUN}-field`, `t-${RUN}-field`, 'นัดลงพื้นที่เก็บข้อมูลสองวัน', 'นัดลงพื้นที่เก็บข้อมูลสองวัน เวลา 09.00 - 15.00 ทั้ง 2 วัน');
+  const [item] = email.actionItems;
+  assert.deepEqual([iso(item.startAt), iso(item.endAt), item.repeatDays, item.availability], [iso(fieldDay(0, 9)), iso(fieldDay(0, 15)), 2, 'AVAILABLE']);
+
+  // มีนัดอื่นโผล่มาในวันที่สอง → ตรวจซ้ำตอนยืนยันแล้วพบ
+  fake.events.push({ id: 'day2', title: 'นัดวันที่สอง', start: iso(fieldDay(1, 10)), end: iso(fieldDay(1, 11)), isAllDay: false });
+  await assert.rejects(() => confirmActionItem(user.id, item.id, {}), (e) => e.code === 'CALENDAR_CONFLICT' && e.details.conflict.id === 'day2');
+  fake.events.pop();
+
+  const inserts = fake.calendarInserts;
+  const done = await confirmActionItem(user.id, item.id, {});
+  const created = fake.created.get(item.id);
+  assert.equal(done.status, 'CREATED');
+  assert.equal(fake.calendarInserts, inserts + 1); // กิจกรรมเดียวที่เกิดซ้ำ ไม่ใช่สองกิจกรรม
+  assert.deepEqual([created._input.repeatDays, created.start, created.end], [2, iso(fieldDay(0, 9)), iso(fieldDay(0, 15))]);
+
+  // หน้าปฏิทินได้ทั้งสองวัน
+  const days = (await api('/api/calendar')).json.items.filter((e) => e.title === 'นัดลงพื้นที่เก็บข้อมูล').map((e) => e.start);
+  assert.deepEqual(days, [iso(fieldDay(0, 9)), iso(fieldDay(1, 9))]);
+});
+
+test('multi-day: a one-day item can be extended to several days by the user, and invalid combinations are refused', async () => {
+  const late1 = await emailRow(`${RUN}-late1`);
+  const [item] = late1.actionItems; // รายการวันเดียวที่มีเวลา
+  const start = fieldDay(7, 13);
+  const end = fieldDay(7, 16);
+  const put = (body) => api(`/api/actions/${item.id}`, { method: 'PUT', body });
+
+  const daily = await put({ startAt: iso(start), endAt: iso(end), repeatDays: 3, isAllDay: false });
+  assert.deepEqual([daily.status, daily.json.action.repeatDays, daily.json.action.endAt], [200, 3, iso(end)]);
+  // ต่อเนื่องข้ามวัน: วันสิ้นสุดอยู่คนละวัน และไม่ซ้ำ
+  const continuous = await put({ startAt: iso(start), endAt: iso(fieldDay(8, 16)), repeatDays: 1 });
+  assert.deepEqual([continuous.status, continuous.json.action.repeatDays], [200, 1]);
+  // ซ้ำรายวันแต่ช่วงเวลายาวเกินหนึ่งวัน หรือจำนวนวันเกินกำหนด → ปฏิเสธ
+  assert.equal((await put({ startAt: iso(start), endAt: iso(fieldDay(8, 16)), repeatDays: 2 })).status, 400);
+  assert.equal((await put({ repeatDays: 60 })).status, 400);
+  // เปลี่ยนเป็นทั้งวันหลายวัน: ไม่ใช้การซ้ำ
+  const allDay = await put({ isAllDay: true, startAt: iso(fieldDay(7, 0)), endAt: iso(fieldDay(9, 0)), repeatDays: 3 });
+  assert.deepEqual([allDay.json.action.isAllDay, allDay.json.action.repeatDays], [true, 1]);
 });

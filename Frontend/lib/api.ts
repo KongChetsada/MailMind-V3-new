@@ -2,6 +2,7 @@
 import type {
   ActionItem,
   CalendarEvent,
+  ConfirmMode,
   EmailCategory,
   EmailCounts,
   EmailDetail,
@@ -92,7 +93,7 @@ export const api = {
     update: (id: string, body: { userCategory?: EmailCategory; isRead?: true }) =>
       request<EmailDetail>(`/api/emails/${id}`, { method: "PATCH", body }),
     analyze: (id: string) => request<EmailDetail>(`/api/emails/${id}/analyze`, { method: "POST" }),
-    sync: () => request<{ created: number }>("/api/emails/sync", { method: "POST" }),
+    sync: () => request<{ created: number; removed: number; restored: number }>("/api/emails/sync", { method: "POST" }),
     createDraft: (id: string, body: { intent?: ReplyIntent; body?: string }) =>
       request<{ draft: ReplyDraft }>(`/api/emails/${id}/draft`, { method: "POST", body }),
   },
@@ -109,9 +110,9 @@ export const api = {
       request<{ items: ActionItem[] }>("/api/actions", { query: { status } }),
     update: (
       id: string,
-      body: Partial<{ title: string; startAt: string | null; endAt: string | null; isAllDay: boolean; location: string | null }>
+      body: Partial<{ title: string; startAt: string | null; endAt: string | null; isAllDay: boolean; location: string | null; repeatDays: number }>
     ) => request<{ action: ActionItem }>(`/api/actions/${id}`, { method: "PUT", body }),
-    confirm: (id: string, body: { force?: boolean; inviteSender?: boolean }) =>
+    confirm: (id: string, body: { force?: boolean; inviteSender?: boolean; mode?: ConfirmMode }) =>
       request<{ action: ActionItem }>(`/api/actions/${id}/confirm`, { method: "POST", body }),
     dismiss: (id: string) => request<{ action: ActionItem }>(`/api/actions/${id}/dismiss`, { method: "POST" }),
   },

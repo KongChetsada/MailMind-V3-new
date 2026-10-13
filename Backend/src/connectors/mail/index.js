@@ -7,6 +7,10 @@
 //   getThread(threadId) -> [{ id, from, subject, date, receivedAt, text, html, isRead }]
 //   sendReply({ threadId, inReplyToMessageId, body }) -> { id }
 //   markRead(messageId)
+// ไม่บังคับ (ถ้าไม่มี ระบบข้ามการตามการลบฝั่งผู้ให้บริการ):
+//   getChangeCursor() -> string
+//   getChanges({ cursor }) -> { cursor, removedIds, restoredIds, readIds, unreadIds, expired }
+//   listRemovedIds({ days }) -> string[]
 //
 // เพิ่มผู้ให้บริการใหม่: เขียนไฟล์ในโฟลเดอร์นี้ แล้วลงทะเบียนใน FACTORIES
 const { createGmailConnector } = require('./gmail');

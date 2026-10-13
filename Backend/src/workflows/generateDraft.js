@@ -9,6 +9,7 @@ const { buildReplyProfile } = require('../core/profile');
 const { getCategoryPolicy, effectiveCategory, REPLY_INTENTS } = require('../core/categories');
 const { normalizeTimeZone, formatThaiRange, formatThaiDate } = require('../core/time');
 const { findAvailableSlots } = require('../core/scheduler');
+const { lastOccurrenceStart } = require('../core/occurrences');
 
 const LOCKED_DRAFT_STATUSES = ['SENDING', 'SENT'];
 
@@ -74,7 +75,11 @@ const generateDraft = async (emailId, options = {}, deps = getDeps()) => {
     location: primaryEvent?.location || null,
     requestedTimeText:
       primaryEvent?.startAt && primaryEvent.isTimeSpecified
-        ? formatThaiRange(primaryEvent.startAt, primaryEvent.endAt, timezone)
+        ? `${formatThaiRange(primaryEvent.startAt, primaryEvent.endAt, timezone)}${
+            primaryEvent.repeatDays > 1
+              ? ` ทุกวัน รวม ${primaryEvent.repeatDays} วัน ถึง${formatThaiDate(lastOccurrenceStart(primaryEvent, timezone), timezone)}`
+              : ''
+          }`
         : primaryEvent?.startAt
           ? formatThaiDate(primaryEvent.startAt, timezone)
           : null,

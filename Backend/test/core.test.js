@@ -296,3 +296,260 @@ test('calendar: event ids are stable per key and use allowed characters', () => 
   assert.notEqual(eventIdFromKey('abc'), eventIdFromKey('abd'));
   assert.match(eventIdFromKey('cmXYZ123'), /^[a-v0-9]{5,1024}$/);
 });
+
+// ───── เธรด ─────
+const { linkToExisting } = require('../src/core/threadLinking');
+const { evaluateAvailability } = require('../src/workflows/availability');
+
+const at = (isoText) => new Date(isoText);
+const tripDay = { id: 'old-trip', kind: 'EVENT', title: 'ไปเที่ยว', startAt: at('2026-10-14T17:00:00Z'), endAt: null, isAllDay: true };
+const meeting = { id: 'old-meet', kind: 'EVENT', title: 'ประชุม', startAt: at('2026-10-20T07:00:00Z'), endAt: at('2026-10-20T08:00:00Z'), isAllDay: false };
+const newItem = (fields) => ({ kind: 'EVENT', title: 'ใหม่', endAt: null, isAllDay: false, relatesTo: null, relation: null, ...fields });
+const link = (items, existing = [tripDay, meeting]) => linkToExisting({ items, existing, timezone: TZ });
+
+test('thread linking: same-day items are linked by rule even when the model says nothing', () => {
+  const [r] = link([newItem({ startAt: at('2026-10-14T19:00:00Z') })]); // 02:00 วันที่ 15 เวลาไทย
+  assert.deepEqual([r.relatedActionId, r.relation], ['old-trip', 'DETAIL']);
+});
+
+test('thread linking: a reschedule is recognised from the model or from wording in the latest message', () => {
+  const moved = newItem({ startAt: at('2026-10-21T08:00:00Z'), endAt: at('2026-10-21T09:00:00Z') });
+  const rel = (items, existing, latestText) => linkToExisting({ items, existing, timezone: TZ, latestText }).map((r) => [r.relatedActionId, r.relation]);
+
+  // โมเดลชี้เป้าและบอกว่าเลื่อน
+  assert.deepEqual(rel([{ ...moved, relatesTo: 2, relation: 'RESCHEDULE' }], [tripDay, meeting]), [['old-meet', 'RESCHEDULE']]);
+  // โมเดลไม่บอกอะไร แต่ข้อความมีคำว่าเลื่อน และมีรายการเดิมรายการเดียว
+  assert.deepEqual(rel([moved], [meeting], 'ขอเลื่อนเป็นวันพุธแทนครับ'), [['old-meet', 'RESCHEDULE']]);
+  assert.deepEqual(rel([moved], [meeting], 'Could we reschedule to Wednesday?'), [['old-meet', 'RESCHEDULE']]);
+  // เปลี่ยนเวลาในวันเดียวกัน = เลื่อน ไม่ใช่รายละเอียดเพิ่ม
+  const laterSameDay = newItem({ startAt: at('2026-10-20T09:00:00Z'), endAt: at('2026-10-20T10:00:00Z') });
+  assert.deepEqual(rel([laterSameDay], [meeting], 'ขอเปลี่ยนเป็นบ่ายสี่โมงครับ'), [['old-meet', 'RESCHEDULE']]);
+  assert.deepEqual(rel([laterSameDay], [meeting], 'เจอกันที่ห้อง 2 นะครับ'), [['old-meet', 'DETAIL']]);
+
+  // มีรายการเดิมหลายรายการและไม่รู้ว่าเลื่อนตัวไหน → ไม่เดา
+  assert.deepEqual(rel([moved], [tripDay, meeting], 'ขอเลื่อนเป็นวันพุธแทนครับ'), [[null, null]]);
+  // ไม่มีคำว่าเลื่อน และคนละวัน → เป็นนัดใหม่
+  assert.deepEqual(rel([moved], [meeting], 'แล้วเจอกันอีกรอบวันพุธนะครับ'), [[null, null]]);
+  // โมเดลอ้างลำดับที่ไม่มีอยู่ หรือชี้ข้ามชนิด → ไม่เชื่อ
+  assert.deepEqual(rel([{ ...moved, relatesTo: 9, relation: 'RESCHEDULE' }], [tripDay, meeting]), [[null, null]]);
+  assert.deepEqual(rel([{ ...moved, kind: 'DEADLINE', relatesTo: 2, relation: 'RESCHEDULE' }], [tripDay, meeting]), [[null, null]]);
+  // โมเดลบอกว่าเป็นรายละเอียดของรายการคนละวัน → ไม่เชื่อ
+  assert.deepEqual(rel([{ ...moved, relatesTo: 1, relation: 'DETAIL' }], [tripDay, meeting]), [[null, null]]);
+  // รายการทั้งวัน (ทริป) + เวลานัดพบในวันเดียวกัน ยังเป็นรายละเอียดเพิ่ม แม้ข้อความมีคำว่าเลื่อน
+  const meetPoint = newItem({ startAt: at('2026-10-14T19:00:00Z') });
+  assert.deepEqual(rel([meetPoint], [tripDay, meeting], 'เลื่อนเวลาออกเดินทางเป็นตีสองนะ'), [['old-trip', 'DETAIL']]);
+});
+
+test('thread linking: an item that repeats an existing one exactly is dropped', () => {
+  const repeat = newItem({ startAt: meeting.startAt, endAt: meeting.endAt });
+  assert.equal(link([repeat]).length, 0);
+  assert.equal(link([{ ...repeat, relatesTo: 2, relation: 'RESCHEDULE' }]).length, 0);
+  assert.equal(link([repeat], []).length, 1); // ไม่มีรายการเดิม = ไม่มีอะไรให้ซ้ำ
+});
+
+test('availability: linked items skip working-hours rules and ignore their own original event', async () => {
+  const calendar = { listEvents: async () => [{ id: 'ev-original', title: 'ประชุม', start: '2026-08-24T10:00:00+07:00', end: '2026-08-24T11:00:00+07:00' }] };
+  const base = { kind: 'EVENT', isAllDay: false, isTimeSpecified: true };
+  const night = { ...base, startAt: at('2026-08-23T19:00:00Z'), endAt: at('2026-08-23T20:00:00Z') }; // 02:00 เวลาไทย
+  const overlap = { ...base, startAt: at('2026-08-24T03:30:00Z'), endAt: at('2026-08-24T04:30:00Z') };
+  const run = (items) => evaluateAvailability({ items, mode: 'SUGGEST', calendar, settings, now: NOW });
+
+  const [unlinked, linked] = await run([night, { ...night, relatedActionId: 'x' }]);
+  assert.equal(unlinked.availability, 'OUT_OF_WORKING_HOURS');
+  assert.ok(unlinked.suggestedSlots.length > 0);
+  assert.deepEqual([linked.availability, linked.suggestedSlots], ['AVAILABLE', null]);
+
+  const [clash, self] = await run([{ ...overlap, relatedActionId: 'x' }, { ...overlap, relatedActionId: 'x', ignoreEventId: 'ev-original' }]);
+  assert.deepEqual([clash.availability, clash.suggestedSlots], ['CONFLICT', null]);
+  assert.equal(self.availability, 'AVAILABLE');
+});
+
+test('validate: an item the model left untitled takes the email subject instead of being dropped', () => {
+  const untitled = { ...baseItem, title: '' };
+  const r = validateAnalysis({ category: 'APPOINTMENT', actionItems: [untitled, { ...baseItem, title: null, start: '2026-08-25T10:00:00+07:00', end: '2026-08-25T11:00:00+07:00' }] }, { ...ctx, fallbackTitle: 'Re: RE: นัดประชุมทีม' });
+  assert.deepEqual(r.actionItems.map((i) => i.title), ['นัดประชุมทีม', 'นัดประชุมทีม']);
+  assert.equal(validateAnalysis({ category: 'APPOINTMENT', actionItems: [untitled] }, ctx).actionItems[0].title, 'รายการจากอีเมล');
+});
+
+test('validate: a stated clock time wins over an "all day" flag', () => {
+  const r = validateAnalysis(
+    {
+      category: 'APPOINTMENT',
+      actionItems: [
+        { ...baseItem, title: 'ตีสอง', start: '2026-08-24T02:00:00+07:00', end: null, isAllDay: true, isTimeSpecified: true },
+        { ...baseItem, title: 'ทั้งวันจริง', start: '2026-08-25T00:00:00+07:00', end: null, isAllDay: true, isTimeSpecified: false },
+      ],
+    },
+    ctx
+  );
+  assert.deepEqual([r.actionItems[0].isAllDay, r.actionItems[0].isTimeSpecified, r.actionItems[0].missingFields], [false, true, ['end']]);
+  assert.deepEqual([r.actionItems[1].isAllDay, r.actionItems[1].isTimeSpecified], [true, false]);
+});
+
+// ───── หลายวัน และข้อความที่บอกแค่เวลา ─────
+const { findDateRange } = require('../src/core/analysis/dateRange');
+const { hasDateCue } = require('../src/core/threadLinking');
+
+test('date range: finds multi-day ranges in Thai and English wording', () => {
+  const opt = { timezone: TZ, referenceYear: 2026 };
+  const days = (text) => {
+    const r = findDateRange(text, opt);
+    return r && [r.start.toISOString(), r.end.toISOString()];
+  };
+  const oct15to17 = ['2026-10-14T17:00:00.000Z', '2026-10-16T17:00:00.000Z'];
+  assert.deepEqual(days('วันที่ 15/10/2569 - 17/10/2569 ไปเที่ยวภูกระดึงกันไหม'), oct15to17);
+  assert.deepEqual(days('15-17 ตุลาคม 2569'), oct15to17);
+  assert.deepEqual(days('15 ต.ค. ถึง 17 ต.ค. 69'), oct15to17);
+  assert.deepEqual(days('15-17 Oct 2026'), oct15to17);
+  assert.deepEqual(days('15-17 ตุลาคม'), oct15to17); // ไม่ระบุปี = ปีอ้างอิง
+  assert.deepEqual(days('30/12 - 2/1/2570'), ['2026-12-29T17:00:00.000Z', '2027-01-01T17:00:00.000Z']); // ข้ามปี
+  for (const text of ['15/10/2569', 'เวลา 10:00 - 11:00 น.', 'ห้อง 3-4', '17/10/2569 - 15/10/2569', '99/99/2569 - 1/1/2570']) {
+    assert.equal(days(text), null, text);
+  }
+});
+
+test('validate: a date range becomes one all-day multi-day item; midnight is not a real time', () => {
+  const text = 'วันที่ 15/10/2569 - 17/10/2569 ไปเที่ยวภูกระดึงกันไหม';
+  const opts = { plainText: text, timezone: TZ, now: at('2026-10-13T10:00:00Z') };
+  const one = (item) => validateAnalysis({ category: 'APPOINTMENT', actionItems: [item] }, opts).actionItems[0];
+  const first = { kind: 'EVENT', title: 'ไปเที่ยว', start: '2026-10-15T00:00:00+07:00', end: null, evidence: text };
+
+  // สิ่งที่โมเดลจริงตอบ: วันแรก 00:00 และติดธงว่าระบุเวลา
+  const fixed = one({ ...first, isAllDay: false, isTimeSpecified: true });
+  assert.deepEqual(
+    [fixed.isAllDay, fixed.isTimeSpecified, fixed.startAt.toISOString(), fixed.endAt.toISOString(), fixed.missingFields],
+    [true, false, '2026-10-14T17:00:00.000Z', '2026-10-16T17:00:00.000Z', []]
+  );
+  // โมเดลให้วันสิ้นสุดมาเอง
+  const given = one({ ...first, end: '2026-10-17T00:00:00+07:00', isAllDay: false, isTimeSpecified: false, evidence: null });
+  assert.deepEqual([given.isAllDay, given.endAt.toISOString()], [true, '2026-10-16T17:00:00.000Z']);
+  // วันเดียวไม่มีเวลา: ไม่กลายเป็น 00:00-01:00 แต่ให้ผู้ใช้เติมเวลา
+  const single = validateAnalysis(
+    { category: 'APPOINTMENT', actionItems: [{ ...first, isAllDay: false, isTimeSpecified: true, evidence: null }] },
+    { ...opts, plainText: 'วันที่ 15/10/2569 ไปเที่ยวภูกระดึงกันไหม' }
+  ).actionItems[0];
+  assert.deepEqual([single.isAllDay, single.isTimeSpecified, single.endAt, single.missingFields], [false, false, null, ['time', 'evidence']]);
+  // มีเวลาจริง: ไม่ถูกแปลงเป็นทั้งวัน แม้ข้อความมีช่วงวันที่
+  const timed = one({ ...first, start: '2026-10-15T09:00:00+07:00', end: '2026-10-15T16:00:00+07:00', isAllDay: false, isTimeSpecified: true });
+  assert.deepEqual([timed.isAllDay, timed.isTimeSpecified], [false, true]);
+});
+
+test('thread linking: a time-only reply moves to the first day of the existing event', () => {
+  const trip3 = { id: 'trip3', kind: 'EVENT', title: 'ภูกระดึง', startAt: at('2026-10-14T17:00:00Z'), endAt: at('2026-10-16T17:00:00Z'), isAllDay: true };
+  const received = at('2026-10-13T14:05:00Z'); // 13 ต.ค. 21:05 เวลาไทย
+  const fiveToday = newItem({ startAt: at('2026-10-12T22:00:00Z'), endAt: at('2026-10-12T23:00:00Z'), isTimeSpecified: true, missingFields: ['end'] }); // 13 ต.ค. 05:00
+  const run = (items, existing, latestText) => linkToExisting({ items, existing, timezone: TZ, latestText, referenceDate: received });
+
+  const [moved] = run([fiveToday], [trip3], 'นัดรวมตัว 05.00 ที่หน้ามหาลัยขอนแก่น นะ เตรียมของมาให้พร้อม');
+  assert.deepEqual(
+    [moved.startAt.toISOString(), moved.endAt.toISOString(), moved.relatedActionId, moved.relation, moved.missingFields],
+    ['2026-10-14T22:00:00.000Z', '2026-10-14T23:00:00.000Z', 'trip3', 'DETAIL', ['end', 'date']]
+  );
+
+  // ข้อความบอกวันเอง → เชื่อวันที่ที่สกัดมา ไม่ย้าย
+  for (const text of ['วันนี้นัดรวมตัว 05.00 นะ', 'นัดรวมตัววันที่ 13 เวลา 05.00', 'พรุ่งนี้เจอกัน 05.00', 'see you today at 5']) {
+    const [kept] = run([fiveToday], [trip3], text);
+    assert.deepEqual([kept.startAt.toISOString(), kept.relatedActionId], ['2026-10-12T22:00:00.000Z', null], text);
+  }
+  // ไม่มีรายการเดิม หรือเป็นรายการทั้งวัน/ไม่มีเวลา → ไม่ย้าย
+  assert.equal(run([fiveToday], [], 'นัดรวมตัว 05.00')[0].startAt.toISOString(), '2026-10-12T22:00:00.000Z');
+  // มีกิจกรรมเดิมอยู่ในวันนี้อยู่แล้ว → เป็นรายละเอียดของวันนี้ ไม่ย้าย
+  const todayEvent = { id: 'today', kind: 'EVENT', title: 'งานวันนี้', startAt: at('2026-10-12T17:00:00Z'), endAt: null, isAllDay: true };
+  assert.deepEqual(run([fiveToday], [todayEvent, trip3], 'นัดรวมตัว 05.00').map((r) => [r.relatedActionId, r.startAt.toISOString()]), [['today', '2026-10-12T22:00:00.000Z']]);
+  // หลายรายการเดิม: เลือกกิจกรรมที่จะถึงก่อน
+  const later = { id: 'later', kind: 'EVENT', title: 'อีกงาน', startAt: at('2026-10-24T17:00:00Z'), endAt: null, isAllDay: true };
+  assert.equal(run([fiveToday], [later, trip3], 'นัดรวมตัว 05.00')[0].relatedActionId, 'trip3');
+});
+
+test('thread linking: any day inside a multi-day event links as a detail', () => {
+  const trip3 = { id: 'trip3', kind: 'EVENT', title: 'ภูกระดึง', startAt: at('2026-10-14T17:00:00Z'), endAt: at('2026-10-16T17:00:00Z'), isAllDay: true };
+  const rel = (iso) => linkToExisting({ items: [newItem({ startAt: at(iso), isTimeSpecified: true })], existing: [trip3], timezone: TZ, latestText: 'วันที่ 16 ขึ้นเขา 06.00' })[0].relation;
+  assert.equal(rel('2026-10-15T23:00:00Z'), 'DETAIL'); // 16 ต.ค. 06:00 = วันที่สองของทริป
+  assert.equal(rel('2026-10-17T02:00:00Z'), 'DETAIL'); // 17 ต.ค. = วันสุดท้าย
+  assert.equal(rel('2026-10-18T02:00:00Z'), null); // หลังทริปจบ
+  assert.equal(hasDateCue('นัดรวมตัว 05.00 ที่หน้ามหาลัยขอนแก่น นะ เตรียมของมาให้พร้อม'), false);
+  assert.equal(hasDateCue('เจอกัน 15/10 ตีห้า'), true);
+});
+
+test('validate: the range is found in the email body when the model quoted only part of it', () => {
+  const text = 'ไปเที่ยวภูกระดึงกันไหม วันที่ 15/10/2569 - 17/10/2569';
+  const opts = { plainText: text, timezone: TZ, now: at('2026-10-13T10:00:00Z') };
+  const item = { kind: 'EVENT', title: 'ไปเที่ยว', start: '2026-10-15T00:00:00+07:00', end: null, isAllDay: false, isTimeSpecified: false, evidence: 'ไปเที่ยวภูกระดึงกันไหม' };
+  const r = validateAnalysis({ category: 'APPOINTMENT', actionItems: [item] }, opts).actionItems[0];
+  assert.deepEqual([r.isAllDay, r.endAt.toISOString()], [true, '2026-10-16T17:00:00.000Z']);
+  // ช่วงวันที่ในเนื้ออีเมลที่ไม่ได้เริ่มวันเดียวกับรายการ ไม่ถูกนำมาใช้
+  const other = validateAnalysis({ category: 'APPOINTMENT', actionItems: [{ ...item, start: '2026-10-20T00:00:00+07:00' }] }, opts).actionItems[0];
+  assert.deepEqual([other.isAllDay, other.endAt], [false, null]);
+});
+
+// ───── หลายวันที่มีเวลา (เกิดทุกวันในช่วงเวลาเดิม) ─────
+const { occurrencesOf, calendarDaysBetween } = require('../src/core/occurrences');
+const { dailyRecurrence } = require('../src/connectors/calendar/google');
+
+test('validate: several days with daily hours become one item repeated each day', () => {
+  const text = 'นัดลงพื้นที่เก็บข้อมูล วันที่ 21-22 ตุลาคม 2569 เวลา 09.00 - 15.00 ทั้ง 2 วัน';
+  const opts = { plainText: text, timezone: TZ, now: at('2026-10-13T10:00:00Z') };
+  const one = (item) => validateAnalysis({ category: 'APPOINTMENT', actionItems: [{ kind: 'EVENT', title: 'ลงพื้นที่', isAllDay: false, isTimeSpecified: true, evidence: 'เวลา 09.00 - 15.00 ทั้ง 2 วัน', ...item }] }, opts).actionItems[0];
+
+  // สิ่งที่โมเดลจริงตอบ: วันแรก 09:00 ถึงวันสุดท้าย 15:00
+  const spanning = one({ start: '2026-10-21T09:00:00+07:00', end: '2026-10-22T15:00:00+07:00' });
+  assert.deepEqual(
+    [spanning.startAt.toISOString(), spanning.endAt.toISOString(), spanning.repeatDays, spanning.isAllDay],
+    ['2026-10-21T02:00:00.000Z', '2026-10-21T08:00:00.000Z', 2, false]
+  );
+  // โมเดลให้แค่วันแรก แต่ข้อความมีช่วงวันที่
+  const firstOnly = one({ start: '2026-10-21T09:00:00+07:00', end: '2026-10-21T15:00:00+07:00' });
+  assert.deepEqual([firstOnly.repeatDays, firstOnly.endAt.toISOString()], [2, '2026-10-21T08:00:00.000Z']);
+  // ข้ามคืน (เวลาจบก่อนเวลาเริ่ม) ยังเป็นกิจกรรมเดียวต่อเนื่อง
+  const overnight = validateAnalysis(
+    { category: 'BOOKING_TRAVEL', actionItems: [{ kind: 'EVENT', title: 'รถทัวร์', start: '2026-10-21T22:00:00+07:00', end: '2026-10-22T05:00:00+07:00', isTimeSpecified: true }] },
+    { ...opts, plainText: 'ออกเดินทาง 22.00 ถึง 05.00' }
+  ).actionItems[0];
+  assert.deepEqual([overnight.repeatDays, overnight.endAt.toISOString()], [1, '2026-10-21T22:00:00.000Z']);
+  // วันเดียวตามปกติ
+  assert.equal(validateAnalysis({ category: 'APPOINTMENT', actionItems: [baseItem] }, ctx).actionItems[0].repeatDays, 1);
+});
+
+test('occurrences: one slot per day at the same clock time; recurrence rule only when needed', () => {
+  const item = { startAt: at('2026-10-21T02:00:00Z'), endAt: at('2026-10-21T08:00:00Z'), repeatDays: 3, isAllDay: false };
+  assert.deepEqual(
+    occurrencesOf(item, TZ).map((o) => [o.start.toISOString(), o.end.toISOString()]),
+    [
+      ['2026-10-21T02:00:00.000Z', '2026-10-21T08:00:00.000Z'],
+      ['2026-10-22T02:00:00.000Z', '2026-10-22T08:00:00.000Z'],
+      ['2026-10-23T02:00:00.000Z', '2026-10-23T08:00:00.000Z'],
+    ]
+  );
+  assert.equal(occurrencesOf({ ...item, repeatDays: 1 }, TZ).length, 1);
+  assert.equal(occurrencesOf({ ...item, isAllDay: true }, TZ).length, 1); // ทั้งวันหลายวันใช้วันสิ้นสุด ไม่ใช้การซ้ำ
+  // ช่วงเปลี่ยนเวลาออมแสง: เวลาบนนาฬิกาคงเดิม
+  const london = occurrencesOf({ startAt: at('2026-10-24T08:00:00Z'), endAt: at('2026-10-24T09:00:00Z'), repeatDays: 2 }, 'Europe/London');
+  assert.equal(london[1].start.toISOString(), '2026-10-25T09:00:00.000Z');
+  assert.equal(calendarDaysBetween(at('2026-10-20T18:00:00Z'), at('2026-10-22T08:00:00Z'), TZ), 1); // 21 ต.ค. 01:00 → 22 ต.ค. 15:00 เวลาไทย
+  assert.deepEqual(dailyRecurrence(2, false), ['RRULE:FREQ=DAILY;COUNT=2']);
+  assert.deepEqual([dailyRecurrence(1, false), dailyRecurrence(3, true)], [[], []]);
+});
+
+test('availability: every day of a multi-day item is checked', async () => {
+  const day2Meeting = { id: 'd2', title: 'ประชุมวันที่สอง', start: '2026-08-25T10:00:00+07:00', end: '2026-08-25T11:00:00+07:00' };
+  const item = { kind: 'EVENT', isAllDay: false, isTimeSpecified: true, startAt: at('2026-08-24T02:00:00Z'), endAt: at('2026-08-24T08:00:00Z'), repeatDays: 2 }; // 09:00–15:00
+  const run = (events, it = item) => evaluateAvailability({ items: [it], mode: 'SUGGEST', calendar: { listEvents: async () => events }, settings, now: NOW });
+
+  assert.equal((await run([]))[0].availability, 'AVAILABLE'); // อยู่ในเวลาทำงานทั้งสองวัน (ไม่ถูกมองเป็นกิจกรรมยาว 30 ชั่วโมง)
+  const [clash] = await run([day2Meeting]);
+  assert.deepEqual([clash.availability, clash.suggestedSlots], ['CONFLICT', null]);
+  assert.match(clash.availabilityReason, /ประชุมวันที่สอง/);
+  // วันที่สองตรงกับวันหยุด
+  const [weekend] = await run([], { ...item, startAt: at('2026-08-28T02:00:00Z'), endAt: at('2026-08-28T08:00:00Z') }); // ศุกร์–เสาร์
+  assert.equal(weekend.availability, 'OUT_OF_WORK_DAYS');
+  // ทุกครั้งของกิจกรรมเดิมที่เกิดซ้ำไม่นับว่าชนกับตัวเอง
+  const own = { ...day2Meeting, id: 'master_1', recurringEventId: 'master' };
+  assert.equal((await run([own], { ...item, relatedActionId: 'x', ignoreEventId: 'master' }))[0].availability, 'AVAILABLE');
+});
+
+test('thread linking: a detail on any day of a repeated item links to it', () => {
+  const fieldwork = { id: 'fw', kind: 'EVENT', title: 'ลงพื้นที่', startAt: at('2026-10-21T02:00:00Z'), endAt: at('2026-10-21T08:00:00Z'), isAllDay: false, repeatDays: 2 };
+  const rel = (iso) => linkToExisting({ items: [newItem({ startAt: at(iso), isTimeSpecified: true })], existing: [fieldwork], timezone: TZ, latestText: 'วันที่ 22 เจอกัน 08.00' })[0].relation;
+  assert.equal(rel('2026-10-22T01:00:00Z'), 'DETAIL'); // วันที่สอง
+  assert.equal(rel('2026-10-23T01:00:00Z'), null); // หลังจบ
+});

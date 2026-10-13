@@ -19,7 +19,33 @@ const toEvent = (item) => ({
   isAllDay: Boolean(item.start?.date && !item.start?.dateTime),
   location: item.location || '',
   htmlLink: item.htmlLink || '',
+  // กิจกรรมที่เกิดซ้ำถูกแตกเป็นรายครั้ง แต่ละครั้งอ้างถึงกิจกรรมต้นทางด้วยรหัสนี้
+  recurringEventId: item.recurringEventId || null,
 });
+
+/** กฎการเกิดซ้ำรายวัน: [] = ไม่ซ้ำ (ใช้ล้างกฎเดิมตอนแก้กิจกรรม) */
+const dailyRecurrence = (repeatDays, isAllDay) =>
+  !isAllDay && Number(repeatDays) > 1 ? [`RRULE:FREQ=DAILY;COUNT=${Math.floor(repeatDays)}`] : [];
+
+/**
+ * ช่วงเวลาในรูปแบบของ Google Calendar
+ * clearOtherKind: ใช้ตอนแก้กิจกรรม — เมื่อเปลี่ยนชนิด (ทั้งวัน <-> มีเวลา) ต้องล้างฟิลด์ของอีกชนิดด้วย null
+ */
+const toEventTimes = ({ start, end, isAllDay, timezone, clearOtherKind = false }) => {
+  const clear = (fields) => (clearOtherKind ? fields : {});
+  if (isAllDay) {
+    const firstDay = startOfZonedDay(new Date(start), timezone);
+    const lastDay = end ? startOfZonedDay(new Date(end), timezone) : firstDay;
+    return {
+      start: { date: dateOnly(firstDay, timezone), ...clear({ dateTime: null, timeZone: null }) },
+      end: { date: dateOnly(addZonedDays(lastDay, 1, timezone), timezone), ...clear({ dateTime: null, timeZone: null }) }, // วันสิ้นสุดแบบไม่รวม
+    };
+  }
+  return {
+    start: { dateTime: new Date(start).toISOString(), timeZone: timezone, ...clear({ date: null }) },
+    end: { dateTime: new Date(end).toISOString(), timeZone: timezone, ...clear({ date: null }) },
+  };
+};
 
 /**
  * รหัสกิจกรรมที่กำหนดเองจาก key ของระบบ: เรียกสร้างซ้ำด้วย key เดิมจะได้กิจกรรมเดิม ไม่เกิดรายการซ้ำ
@@ -57,24 +83,39 @@ const createGoogleCalendarConnector = (account) => {
       return events;
     },
 
+    /** แก้วันเวลา (และสถานที่ ถ้าระบุ) ของกิจกรรมที่มีอยู่ — ชื่อและรายละเอียดอื่นคงเดิม */
+    async updateEvent({ eventId, start, end, isAllDay, location, timezone, repeatDays = 1 }) {
+      const res = await withGoogleErrors(() =>
+        calendar.events.patch({
+          calendarId: CALENDAR_ID,
+          eventId,
+          sendUpdates: 'none',
+          requestBody: {
+            ...toEventTimes({ start, end, isAllDay, timezone, clearOtherKind: true }),
+            ...(location ? { location } : {}),
+            recurrence: dailyRecurrence(repeatDays, isAllDay),
+          },
+        })
+      );
+      return { id: res.data.id, htmlLink: res.data.htmlLink || '' };
+    },
+
     /**
      * สร้างกิจกรรม — ส่ง idempotencyKey เดิมซ้ำได้โดยไม่เกิดกิจกรรมซ้ำ
      * คืน { id, htmlLink, alreadyExisted }
      */
-    async createEvent({ idempotencyKey, title, start, end, isAllDay, location, description, timezone, attendeeEmail }) {
+    async createEvent({ idempotencyKey, title, start, end, isAllDay, location, description, timezone, attendeeEmail, repeatDays = 1 }) {
       const id = eventIdFromKey(idempotencyKey);
-      const requestBody = { id, summary: title, location: location || '', description: description || '' };
-
-      if (isAllDay) {
-        const firstDay = startOfZonedDay(new Date(start), timezone);
-        const lastDay = end ? startOfZonedDay(new Date(end), timezone) : firstDay;
-        requestBody.start = { date: dateOnly(firstDay, timezone) };
-        requestBody.end = { date: dateOnly(addZonedDays(lastDay, 1, timezone), timezone) }; // วันสิ้นสุดแบบไม่รวม
-      } else {
-        requestBody.start = { dateTime: new Date(start).toISOString(), timeZone: timezone };
-        requestBody.end = { dateTime: new Date(end).toISOString(), timeZone: timezone };
-      }
+      const requestBody = {
+        id,
+        summary: title,
+        location: location || '',
+        description: description || '',
+        ...toEventTimes({ start, end, isAllDay, timezone }),
+      };
       if (attendeeEmail) requestBody.attendees = [{ email: attendeeEmail }];
+      const recurrence = dailyRecurrence(repeatDays, isAllDay);
+      if (recurrence.length) requestBody.recurrence = recurrence;
 
       try {
         const res = await withGoogleErrors(() =>
@@ -96,4 +137,4 @@ const createGoogleCalendarConnector = (account) => {
   };
 };
 
-module.exports = { createGoogleCalendarConnector, eventIdFromKey };
+module.exports = { createGoogleCalendarConnector, eventIdFromKey, toEventTimes, dailyRecurrence };

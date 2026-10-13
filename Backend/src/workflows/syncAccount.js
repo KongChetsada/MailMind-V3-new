@@ -3,6 +3,7 @@
 const { getDeps } = require('./deps');
 const { env } = require('../config/env');
 const { SKIP_PROVIDER_LABELS } = require('../core/categories');
+const { applyProviderChanges } = require('./applyProviderChanges');
 
 const OVERLAP_MS = 5 * 60 * 1000;
 const FETCH_BATCH = 5;
@@ -61,12 +62,31 @@ const syncAccount = async (accountId, deps = getDeps()) => {
       }
     }
 
+    // การเปลี่ยนแปลงที่เกิดนอกระบบ: ลบ / ถังขยะ / กู้คืน / อ่านแล้ว
+    // ขั้นนี้ล้มเหลวได้โดยไม่ทำให้อีเมลใหม่ที่ดึงมาแล้วเสียไป: คงตำแหน่งเดิมไว้ลองใหม่รอบหน้า
+    let changes = { cursor: account.changeCursor, removed: 0, restored: 0, readChanged: 0 };
+    try {
+      changes = await applyProviderChanges({ account, mail, prisma, now, logger });
+    } catch (error) {
+      if (error.code === 'REAUTH_REQUIRED') throw error;
+      logger.warn('CHANGES_FAILED', 'Could not read provider changes; will retry on the next sync', { error: error.message });
+    }
+
     await prisma.mailAccount.update({
       where: { id: account.id },
-      data: { syncCursor: startedAt, lastSyncAt: startedAt, lastSyncError: null },
+      data: { syncCursor: startedAt, lastSyncAt: startedAt, lastSyncError: null, changeCursor: changes.cursor },
     });
 
-    const summary = { status: 'completed', found: ids.length, created, skippedByRule, truncated };
+    const summary = {
+      status: 'completed',
+      found: ids.length,
+      created,
+      skippedByRule,
+      truncated,
+      removed: changes.removed,
+      restored: changes.restored,
+      readChanged: changes.readChanged,
+    };
     logger.info('SYNC_END', 'Account synchronization finished', summary);
     return summary;
   } catch (error) {

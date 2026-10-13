@@ -13,7 +13,9 @@ export type Priority = "HIGH" | "NORMAL" | "LOW";
 export type AnalysisStatus = "PENDING" | "PROCESSING" | "DONE" | "FAILED" | "SKIPPED";
 export type ActionKind = "EVENT" | "DEADLINE";
 export type Availability = "NOT_CHECKED" | "AVAILABLE" | "CONFLICT" | "OUT_OF_WORKING_HOURS" | "OUT_OF_WORK_DAYS";
-export type ActionStatus = "SUGGESTED" | "CREATING" | "CREATED" | "FAILED" | "DISMISSED";
+export type ActionStatus = "SUGGESTED" | "CREATING" | "CREATED" | "FAILED" | "DISMISSED" | "MERGED";
+export type ActionRelation = "DETAIL" | "RESCHEDULE";
+export type ConfirmMode = "CREATE" | "UPDATE_RELATED";
 export type ReplyIntent = "ACCEPT" | "PROPOSE_TIME" | "DECLINE" | "ANSWER" | "ACKNOWLEDGE";
 export type DraftStatus = "PENDING" | "SENDING" | "SENT" | "FAILED" | "DISCARDED";
 export type EmailFilter = "has_draft" | "has_action" | "needs_reply" | "failed" | "unread";
@@ -55,6 +57,8 @@ export interface ActionItem {
   endAt: string | null;
   isAllDay: boolean;
   isTimeSpecified: boolean;
+  /** จำนวนวันติดกันที่กิจกรรมเกิดในช่วงเวลาเดิม (1 = ครั้งเดียว) */
+  repeatDays: number;
   location: string | null;
   evidence: string | null;
   missingFields: string[];
@@ -65,6 +69,19 @@ export interface ActionItem {
   externalLink: string | null;
   errorMessage: string | null;
   emailSubject?: string | null;
+  /** ความสัมพันธ์กับรายการเดิมในเธรดเดียวกัน (null = ไม่เกี่ยวข้อง) */
+  relation: ActionRelation | null;
+  related: {
+    id: string;
+    emailId: string;
+    title: string;
+    startAt: string | null;
+    endAt: string | null;
+    isAllDay: boolean;
+    isTimeSpecified: boolean;
+    repeatDays: number;
+    status: ActionStatus;
+  } | null;
 }
 
 export interface ReplyDraft {
@@ -172,6 +189,6 @@ export interface Stats {
     sentAfterEdit: number;
     medianResponseMinutes: number | null;
   };
-  actions: { suggested: number; created: number; dismissed: number; failed: number };
+  actions: { suggested: number; created: number; dismissed: number; merged: number; failed: number };
   models: { provider: string; model: string | null; analyzed: number }[];
 }

@@ -97,8 +97,14 @@ export default function InboxView() {
     setSyncing(true);
     setMessage(null);
     try {
-      const { created } = await api.emails.sync();
-      setMessage({ tone: created > 0 ? "success" : "info", text: created > 0 ? `พบอีเมลใหม่ ${created} ฉบับ กำลังวิเคราะห์เบื้องหลัง` : "ไม่มีอีเมลใหม่" });
+      const { created, removed, restored } = await api.emails.sync();
+      const parts = [
+        created + restored > 0 ? `พบอีเมลใหม่ ${created + restored} ฉบับ กำลังวิเคราะห์เบื้องหลัง` : "ไม่มีอีเมลใหม่",
+        ...(removed > 0 ? [`นำออก ${removed} ฉบับที่ถูกลบในกล่องจดหมาย`] : []),
+      ];
+      setMessage({ tone: created + restored + removed > 0 ? "success" : "info", text: parts.join(" · ") });
+      // อีเมลที่เปิดค้างอยู่อาจเพิ่งถูกนำออก: ปิดแผงรายละเอียดถ้าไม่อยู่ในรายการแล้ว
+      if (removed > 0 && selectedId) select(null);
       await reload(true);
     } catch (e) {
       setMessage({ tone: "error", text: errorMessage(e, "ซิงก์อีเมลไม่สำเร็จ") });

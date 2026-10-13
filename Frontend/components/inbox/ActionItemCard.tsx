@@ -1,14 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { CalendarClock, Flag, MapPin, Quote, ExternalLink, CalendarCheck, Pencil, X } from "lucide-react";
+import { CalendarClock, Flag, MapPin, Quote, ExternalLink, CalendarCheck, CalendarSync, Link2, Pencil, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Notice, Spinner } from "@/components/common/Feedback";
 import { api, ApiError, errorMessage } from "@/lib/api";
 import { AVAILABILITY_META, MISSING_FIELD_TEXT } from "@/lib/labels";
-import { formatSlot, formatWhen, fromInputs, toDateInput, toTimeInput } from "@/lib/format";
-import type { ActionItem } from "@/lib/types";
+import { formatSlot, formatWhen } from "@/lib/format";
+import ActionItemEditForm, { type ActionItemPatch } from "./ActionItemEditForm";
+import type { ActionItem, ConfirmMode } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -25,16 +25,8 @@ export default function ActionItemCard({ item, canInviteSender, onChange }: Prop
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);
   const [inviteSender, setInviteSender] = useState(false);
-
-  const [form, setForm] = useState({
-    title: item.title,
-    date: toDateInput(item.startAt),
-    endDate: toDateInput(item.endAt || item.startAt),
-    start: item.isTimeSpecified ? toTimeInput(item.startAt) : "",
-    end: item.isTimeSpecified ? toTimeInput(item.endAt) : "",
-    isAllDay: item.isAllDay,
-    location: item.location || "",
-  });
+  // โหมดที่ผู้ใช้กดล่าสุด — ใช้เมื่อกด "บันทึกทับ" หลังพบว่าชนกับกิจกรรมอื่น
+  const [lastMode, setLastMode] = useState<ConfirmMode>("CREATE");
 
   const isDeadline = item.kind === "DEADLINE";
   const editable = item.status === "SUGGESTED" || item.status === "FAILED";
@@ -58,27 +50,19 @@ export default function ActionItemCard({ item, canInviteSender, onChange }: Prop
     }
   };
 
-  const save = async () => {
-    const timed = !form.isAllDay && Boolean(form.start);
-    const startAt = fromInputs(form.date, timed ? form.start : "00:00");
-    let endAt: string | null = null;
-    if (!isDeadline) {
-      if (form.isAllDay) endAt = fromInputs(form.endDate || form.date);
-      else if (timed && form.end) endAt = fromInputs(form.date, form.end);
-    }
-    const ok = await run("save", () =>
-      api.actions.update(item.id, {
-        title: form.title,
-        location: form.location || null,
-        isAllDay: form.isAllDay || (isDeadline && !timed),
-        startAt,
-        endAt,
-      })
-    );
+  const save = async (patch: ActionItemPatch) => {
+    const ok = await run("save", () => api.actions.update(item.id, patch));
     if (ok) setEditing(false);
   };
 
-  const confirm = (force = false) => run("confirm", () => api.actions.confirm(item.id, { force, inviteSender }));
+  const confirm = (mode: ConfirmMode, force = false) => {
+    setLastMode(mode);
+    return run("confirm", () => api.actions.confirm(item.id, { force, mode, inviteSender: mode === "CREATE" && inviteSender }));
+  };
+
+  // รายการเดิมในเธรดเดียวกันที่ยังแก้ได้ → เสนอทางเลือก "แก้กิจกรรมเดิม" คู่กับ "เพิ่มเป็นรายการแยก"
+  const related = item.related && ["SUGGESTED", "FAILED", "CREATED"].includes(item.related.status) ? item.related : null;
+  const isReschedule = item.relation === "RESCHEDULE";
 
   return (
     <div
@@ -86,6 +70,7 @@ export default function ActionItemCard({ item, canInviteSender, onChange }: Prop
         "rounded-2xl border p-4",
         item.status === "CREATED" && "border-emerald-200 bg-emerald-50/40",
         item.status === "DISMISSED" && "border-slate-200 bg-slate-50 opacity-70",
+        item.status === "MERGED" && "border-indigo-200 bg-indigo-50/40",
         editable && "border-amber-200 bg-amber-50/40"
       )}
     >
@@ -110,6 +95,19 @@ export default function ActionItemCard({ item, canInviteSender, onChange }: Prop
         )}
       </div>
 
+      {item.related && item.status !== "MERGED" && (
+        <div className="mt-3 flex items-start gap-2 rounded-xl border border-indigo-200 bg-indigo-50/70 px-3 py-2 text-xs text-indigo-900">
+          <Link2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <div>
+            <p className="font-bold">{isReschedule ? "อีเมลนี้ขอเปลี่ยนวันเวลาของกิจกรรมเดิมในเธรด" : "เกี่ยวข้องกับกิจกรรมเดิมในเธรดนี้"}</p>
+            <p>
+              {item.related.title} · {formatWhen(item.related)}
+              {item.related.status === "CREATED" ? " · อยู่ในปฏิทินแล้ว" : item.related.status === "SUGGESTED" ? " · ยังรอยืนยัน" : ""}
+            </p>
+          </div>
+        </div>
+      )}
+
       {item.evidence && (
         <p className="mt-3 flex gap-1.5 rounded-lg bg-white/70 px-2.5 py-1.5 text-xs italic text-slate-600">
           <Quote className="mt-0.5 h-3 w-3 shrink-0 text-slate-400" />
@@ -121,7 +119,7 @@ export default function ActionItemCard({ item, canInviteSender, onChange }: Prop
         <div className="mt-3 space-y-1.5">
           {item.availabilityReason && item.availability !== "AVAILABLE" && <Notice tone="warn">{item.availabilityReason}</Notice>}
           {item.missingFields.map((field) => (
-            <Notice key={field} tone={field === "start" || field === "time" ? "warn" : "info"}>
+            <Notice key={field} tone={field === "start" || field === "time" || field === "date" ? "warn" : "info"}>
               {MISSING_FIELD_TEXT[field] || field}
             </Notice>
           ))}
@@ -138,50 +136,12 @@ export default function ActionItemCard({ item, canInviteSender, onChange }: Prop
         </div>
       )}
 
-      {editing && (
-        <div className="mt-3 space-y-2 rounded-xl border border-slate-200 bg-white p-3">
-          <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="ชื่อรายการ" className="h-9 text-sm" />
-          <div className="flex flex-wrap items-center gap-2">
-            <Input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} className="h-9 w-40 text-sm" />
-            {form.isAllDay && !isDeadline ? (
-              <>
-                <span className="text-xs text-slate-400">ถึง</span>
-                <Input type="date" value={form.endDate} min={form.date} onChange={(e) => setForm({ ...form, endDate: e.target.value })} className="h-9 w-40 text-sm" />
-              </>
-            ) : (
-              !form.isAllDay && (
-                <>
-                  <Input type="time" value={form.start} onChange={(e) => setForm({ ...form, start: e.target.value })} className="h-9 w-28 text-sm" />
-                  {!isDeadline && (
-                    <>
-                      <span className="text-xs text-slate-400">ถึง</span>
-                      <Input type="time" value={form.end} onChange={(e) => setForm({ ...form, end: e.target.value })} className="h-9 w-28 text-sm" />
-                    </>
-                  )}
-                </>
-              )
-            )}
-            <label className="flex items-center gap-1.5 text-xs text-slate-600">
-              <input type="checkbox" checked={form.isAllDay} onChange={(e) => setForm({ ...form, isAllDay: e.target.checked })} />
-              ทั้งวัน
-            </label>
-          </div>
-          <Input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="สถานที่ (ไม่บังคับ)" className="h-9 text-sm" />
-          <div className="flex gap-2">
-            <Button size="sm" onClick={save} disabled={busy !== null || !form.title.trim()} className="rounded-lg bg-blue-600 text-xs hover:bg-blue-700">
-              {busy === "save" && <Spinner className="mr-1.5 h-3 w-3" />} บันทึกและตรวจตารางใหม่
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setEditing(false)} className="rounded-lg text-xs">
-              ยกเลิก
-            </Button>
-          </div>
-        </div>
-      )}
+      {editing && <ActionItemEditForm item={item} saving={busy === "save"} onSave={save} onCancel={() => setEditing(false)} />}
 
       {conflict && (
         <Notice tone="error" className="mt-3">
           <p>{conflict}</p>
-          <button onClick={() => confirm(true)} disabled={busy !== null} className="mt-1 font-bold underline">
+          <button onClick={() => confirm(lastMode, true)} disabled={busy !== null} className="mt-1 font-bold underline">
             บันทึกทับลงปฏิทินต่อไป
           </button>
         </Notice>
@@ -199,16 +159,41 @@ export default function ActionItemCard({ item, canInviteSender, onChange }: Prop
 
       {editable && !editing && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Button
-            size="sm"
-            onClick={() => confirm(false)}
-            disabled={busy !== null || blocking.length > 0}
-            title={blocking.length > 0 ? "กรุณาเติมวันเวลาก่อน" : undefined}
-            className="rounded-lg bg-emerald-600 text-xs font-bold hover:bg-emerald-700"
-          >
-            {busy === "confirm" ? <Spinner className="mr-1.5 h-3 w-3" /> : <CalendarCheck className="mr-1.5 h-3.5 w-3.5" />}
-            บันทึกลงปฏิทิน
-          </Button>
+          {(() => {
+            const disabled = busy !== null || blocking.length > 0;
+            const title = blocking.length > 0 ? "กรุณาเติมวันเวลาก่อน" : undefined;
+            const createButton = (primary: boolean) => (
+              <Button
+                key="create"
+                size="sm"
+                variant={primary ? "default" : "outline"}
+                onClick={() => confirm("CREATE")}
+                disabled={disabled}
+                title={title}
+                className={cn("rounded-lg text-xs font-bold", primary && "bg-emerald-600 hover:bg-emerald-700")}
+              >
+                {busy === "confirm" && lastMode === "CREATE" ? <Spinner className="mr-1.5 h-3 w-3" /> : <CalendarCheck className="mr-1.5 h-3.5 w-3.5" />}
+                {related ? "เพิ่มเป็นรายการแยก" : "บันทึกลงปฏิทิน"}
+              </Button>
+            );
+            if (!related) return createButton(true);
+            const updateButton = (primary: boolean) => (
+              <Button
+                key="update"
+                size="sm"
+                variant={primary ? "default" : "outline"}
+                onClick={() => confirm("UPDATE_RELATED")}
+                disabled={disabled}
+                title={title || "ย้ายกิจกรรมเดิมมาเป็นวันเวลานี้ ชื่อกิจกรรมเดิมคงไว้"}
+                className={cn("rounded-lg text-xs font-bold", primary && "bg-indigo-600 hover:bg-indigo-700")}
+              >
+                {busy === "confirm" && lastMode === "UPDATE_RELATED" ? <Spinner className="mr-1.5 h-3 w-3" /> : <CalendarSync className="mr-1.5 h-3.5 w-3.5" />}
+                แก้กิจกรรมเดิมเป็นวันเวลานี้
+              </Button>
+            );
+            // เลื่อนนัดชัดเจน → ปุ่มหลักคือแก้กิจกรรมเดิม · รายละเอียดเพิ่ม → ปุ่มหลักคือเพิ่มแยก
+            return isReschedule ? [updateButton(true), createButton(false)] : [createButton(true), updateButton(false)];
+          })()}
           <Button size="sm" variant="outline" onClick={() => setEditing(true)} className="rounded-lg text-xs">
             <Pencil className="mr-1.5 h-3 w-3" /> แก้ไข
           </Button>
@@ -236,6 +221,12 @@ export default function ActionItemCard({ item, canInviteSender, onChange }: Prop
       )}
       {item.status === "CREATING" && <p className="mt-3 text-xs text-slate-500">กำลังบันทึกลงปฏิทิน...</p>}
       {item.status === "DISMISSED" && <p className="mt-3 text-xs text-slate-500">เลือกไม่ลงปฏิทิน</p>}
+      {item.status === "MERGED" && (
+        <p className="mt-3 flex items-center gap-2 text-xs font-bold text-indigo-700">
+          <CalendarSync className="h-3.5 w-3.5" />
+          ใช้วันเวลานี้แก้กิจกรรมเดิมแล้ว{item.related ? `: ${item.related.title} · ${formatWhen(item.related)}` : ""}
+        </p>
+      )}
     </div>
   );
 }

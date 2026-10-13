@@ -42,7 +42,8 @@ router.post('/sync', async (req, res) => {
     results.push(await syncAccount(account.id));
   }
   runAnalyzeJob().catch(() => {});
-  res.json({ results, created: results.reduce((sum, r) => sum + (r.created || 0), 0) });
+  const total = (key) => results.reduce((sum, r) => sum + (r[key] || 0), 0);
+  res.json({ results, created: total('created'), removed: total('removed'), restored: total('restored') });
 });
 
 // GET /api/emails/:id — รายละเอียด + เนื้อหาเธรด

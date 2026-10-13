@@ -81,6 +81,7 @@ const getStats = async (userId, days = 30) => {
       suggested: actions.SUGGESTED || 0,
       created: actions.CREATED || 0,
       dismissed: actions.DISMISSED || 0,
+      merged: actions.MERGED || 0,
       failed: actions.FAILED || 0,
     },
     models: modelGroups

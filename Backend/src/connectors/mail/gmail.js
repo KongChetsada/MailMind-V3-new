@@ -133,6 +133,82 @@ const createGmailConnector = (account) => {
       return { id: res.data.id };
     },
 
+    /** ตำแหน่งปัจจุบันของบันทึกการเปลี่ยนแปลง (เก็บไว้ถามครั้งถัดไปว่ามีอะไรเปลี่ยนตั้งแต่ตรงนี้) */
+    async getChangeCursor() {
+      const res = await withGoogleErrors(() => gmail.users.getProfile({ userId: 'me' }));
+      return String(res.data.historyId);
+    },
+
+    /**
+     * สิ่งที่เปลี่ยนในกล่องจดหมายตั้งแต่ cursor — หนึ่งคำขอต่อ 500 รายการเปลี่ยนแปลง ไม่ต้องไล่ถามทีละฉบับ
+     * คืน { cursor, removedIds, restoredIds, readIds, unreadIds, expired }
+     *   removedIds  : ถูกลบถาวร ย้ายลงถังขยะ หรือถูกทำเป็นสแปม
+     *   restoredIds : ถูกกู้กลับมาที่กล่องขาเข้า
+     *   expired     : cursor เก่าเกินกว่าที่ Gmail เก็บไว้ (ประมาณหนึ่งสัปดาห์) ต้องตรวจด้วยวิธีสำรอง
+     */
+    async getChanges({ cursor }) {
+      const state = new Map(); // messageId -> { removed, read } สถานะล่าสุดชนะ
+      const set = (id, patch) => state.set(id, { ...(state.get(id) || {}), ...patch });
+      let pageToken;
+      let latest = cursor;
+      try {
+        do {
+          const res = await withGoogleErrors(() =>
+            gmail.users.history.list({
+              userId: 'me',
+              startHistoryId: cursor,
+              historyTypes: ['messageDeleted', 'labelAdded', 'labelRemoved'],
+              maxResults: 500,
+              pageToken,
+            })
+          );
+          for (const record of res.data.history || []) {
+            for (const d of record.messagesDeleted || []) set(d.message.id, { removed: true });
+            for (const a of record.labelsAdded || []) {
+              if (a.labelIds?.some((l) => l === 'TRASH' || l === 'SPAM')) set(a.message.id, { removed: true });
+              if (a.labelIds?.includes('INBOX')) set(a.message.id, { removed: false });
+              if (a.labelIds?.includes('UNREAD')) set(a.message.id, { read: false });
+            }
+            for (const r of record.labelsRemoved || []) {
+              if (r.labelIds?.some((l) => l === 'TRASH' || l === 'SPAM')) set(r.message.id, { removed: false });
+              if (r.labelIds?.includes('UNREAD')) set(r.message.id, { read: true });
+            }
+          }
+          if (res.data.historyId) latest = String(res.data.historyId);
+          pageToken = res.data.nextPageToken;
+        } while (pageToken);
+      } catch (error) {
+        const status = error.code || error.status || error.response?.status;
+        if (status === 404) return { cursor: null, removedIds: [], restoredIds: [], readIds: [], unreadIds: [], expired: true };
+        throw error;
+      }
+      const pick = (test) => [...state.entries()].filter(([, v]) => test(v)).map(([id]) => id);
+      return {
+        cursor: latest,
+        removedIds: pick((v) => v.removed === true),
+        restoredIds: pick((v) => v.removed === false),
+        readIds: pick((v) => v.read === true && v.removed !== true),
+        unreadIds: pick((v) => v.read === false && v.removed !== true),
+        expired: false,
+      };
+    },
+
+    /** วิธีสำรองเมื่อ cursor หมดอายุ: รหัสข้อความที่อยู่ในถังขยะหรือสแปมช่วงที่ผ่านมา */
+    async listRemovedIds({ days = 30, maxMessages = 500 }) {
+      const ids = [];
+      for (const q of [`in:trash newer_than:${days}d`, `in:spam newer_than:${days}d`]) {
+        let pageToken;
+        do {
+          const res = await withGoogleErrors(() =>
+            gmail.users.messages.list({ userId: 'me', q, maxResults: 100, pageToken, includeSpamTrash: true })
+          );
+          for (const m of res.data.messages || []) ids.push(m.id);
+          pageToken = res.data.nextPageToken;
+        } while (pageToken && ids.length < maxMessages);
+      }
+      return ids;
+    },
+
     async markRead(messageId) {
       await withGoogleErrors(() =>
         gmail.users.messages.modify({ userId: 'me', id: messageId, requestBody: { removeLabelIds: ['UNREAD'] } })

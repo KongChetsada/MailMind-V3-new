@@ -65,6 +65,13 @@ enum ActionStatus {
   CREATED
   FAILED
   DISMISSED
+  MERGED // รวมเข้ากับรายการเดิมในเธรดแล้ว (ไม่ได้สร้างกิจกรรมของตัวเอง)
+}
+
+// ความสัมพันธ์กับรายการเดิมในเธรดเดียวกัน
+enum ActionRelation {
+  DETAIL // รายละเอียดเพิ่มของกิจกรรมเดิม (เช่น เวลานัดพบของทริปทั้งวัน)
+  RESCHEDULE // อีเมลขอเปลี่ยนวันเวลาของกิจกรรมเดิม
 }
 
 enum ReplyIntent {
@@ -177,6 +184,8 @@ model MailAccount {
   syncCursor    DateTime?
   lastSyncAt    DateTime?
   lastSyncError String?
+  // ตำแหน่งล่าสุดของบันทึกการเปลี่ยนแปลงฝั่งผู้ให้บริการ (Gmail historyId) ใช้ตามการลบ/ย้ายลงถังขยะ/อ่านแล้ว
+  changeCursor  String?
 
   emails EmailMessage[]
 
@@ -217,6 +226,9 @@ model EmailMessage {
   summary    String?        @db.Text
   needsReply Boolean        @default(false)
 
+  // ถูกลบ/ย้ายลงถังขยะ/ทำเป็นสแปมฝั่งผู้ให้บริการ: ซ่อนจาก Inbox แต่เก็บประวัติและสถิติไว้
+  removedAt DateTime?
+
   // ผู้ใช้แก้ประเภทเอง (เก็บแยกเพื่อวัดความถูกต้องของ AI)
   userCategory EmailCategory?
 
@@ -245,6 +257,8 @@ model ActionItem {
   endAt           DateTime?
   isAllDay        Boolean    @default(false)
   isTimeSpecified Boolean    @default(false)
+  // จำนวนวันติดกันที่กิจกรรมเกิดในช่วงเวลาเดิม (1 = ครั้งเดียว) เช่น อบรม 2 วัน เวลา 09:00–15:00 ทั้งสองวัน
+  repeatDays      Int        @default(1)
   location        String?
 
   evidence      String?  @db.Text // ข้อความต้นทางในอีเมลที่ใช้เป็นหลักฐาน
@@ -260,6 +274,12 @@ model ActionItem {
   externalLink    String?
   errorMessage    String?
   createdEventAt  DateTime?
+
+  // รายการเดิมในเธรดเดียวกันที่รายการนี้เกี่ยวข้อง (ผูกด้วยกฎ ดู core/threadLinking.js)
+  relatedActionId String?
+  relatedAction   ActionItem?     @relation("ActionLink", fields: [relatedActionId], references: [id], onDelete: SetNull)
+  linkedActions   ActionItem[]    @relation("ActionLink")
+  relation        ActionRelation?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

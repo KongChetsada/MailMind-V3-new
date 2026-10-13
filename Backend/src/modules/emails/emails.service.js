@@ -25,6 +25,7 @@ const toActionDto = (a) => ({
   endAt: a.endAt,
   isAllDay: a.isAllDay,
   isTimeSpecified: a.isTimeSpecified,
+  repeatDays: a.repeatDays,
   location: a.location,
   evidence: a.evidence,
   missingFields: a.missingFields,
@@ -34,6 +35,21 @@ const toActionDto = (a) => ({
   status: a.status,
   externalLink: a.externalLink,
   errorMessage: a.errorMessage,
+  relation: a.relation,
+  // รายการเดิมในเธรดเดียวกันที่รายการนี้เกี่ยวข้อง (ถ้ามี)
+  related: a.relatedAction
+    ? {
+        id: a.relatedAction.id,
+        emailId: a.relatedAction.emailId,
+        title: a.relatedAction.title,
+        startAt: a.relatedAction.startAt,
+        endAt: a.relatedAction.endAt,
+        isAllDay: a.relatedAction.isAllDay,
+        isTimeSpecified: a.relatedAction.isTimeSpecified,
+        repeatDays: a.relatedAction.repeatDays,
+        status: a.relatedAction.status,
+      }
+    : null,
 });
 
 const toDraftDto = (d) =>
@@ -65,11 +81,11 @@ const toListDto = (e) => ({
   analysisError: e.analysisError,
   draftStatus: e.replyDraft?.status || null,
   suggestedActions: e.actionItems.filter((a) => a.status === 'SUGGESTED').length,
-  createdActions: e.actionItems.filter((a) => a.status === 'CREATED').length,
+  createdActions: e.actionItems.filter((a) => a.status === 'CREATED' || a.status === 'MERGED').length,
 });
 
 const listEmails = async (userId, { category, filter, q, cursor, limit = 30 }) => {
-  const and = [{ mailAccount: { userId } }];
+  const and = [{ mailAccount: { userId }, removedAt: null }];
   if (category && CATEGORY_CODES.includes(category)) and.push(byEffectiveCategory(category));
   if (filter && FILTERS[filter]) and.push(FILTERS[filter]);
   if (q) {
@@ -94,7 +110,7 @@ const listEmails = async (userId, { category, filter, q, cursor, limit = 30 }) =
 
 /** จำนวนอีเมลต่อประเภท และตัวนับสำหรับตัวกรอง */
 const getCounts = async (userId) => {
-  const base = { mailAccount: { userId } };
+  const base = { mailAccount: { userId }, removedAt: null };
   const [byAi, byUser, total, unread, failed, pending, hasDraft, hasAction] = await Promise.all([
     prisma.emailMessage.groupBy({ by: ['category'], where: { ...base, userCategory: null }, _count: true }),
     prisma.emailMessage.groupBy({ by: ['userCategory'], where: { ...base, userCategory: { not: null } }, _count: true }),
@@ -122,12 +138,12 @@ const getEmailDetail = async (userId, emailId) => {
   const email = await findOwnedEmail(userId, emailId, {
     mailAccount: true,
     replyDraft: true,
-    actionItems: { orderBy: [{ startAt: 'asc' }, { createdAt: 'asc' }] },
+    actionItems: { orderBy: [{ startAt: 'asc' }, { createdAt: 'asc' }], include: { relatedAction: true } },
   });
 
   let messages = [];
-  let threadError = null;
-  try {
+  let threadError = email.removedAt ? 'อีเมลนี้ถูกลบหรือย้ายลงถังขยะในกล่องจดหมายแล้ว' : null;
+  if (!email.removedAt) try {
     const thread = await getDeps().getMail(email.mailAccount).getThread(email.providerThreadId);
     messages = thread.map((m) => ({
       id: m.id,
@@ -148,6 +164,7 @@ const getEmailDetail = async (userId, emailId) => {
 
   return {
     ...toListDto(email),
+    removedAt: email.removedAt,
     accountEmail: email.mailAccount.emailAddress,
     aiProvider: email.aiProvider,
     aiModel: email.aiModel,
