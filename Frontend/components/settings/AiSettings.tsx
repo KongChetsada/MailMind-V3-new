@@ -9,7 +9,6 @@ import { Switch } from "@/components/ui/switch";
 import { Notice, Spinner } from "@/components/common/Feedback";
 import { api, errorMessage } from "@/lib/api";
 import type { SettingsResponse } from "@/lib/types";
-import { cn } from "@/lib/utils";
 
 interface Props {
   data: SettingsResponse;
@@ -108,25 +107,28 @@ export default function AiSettings({ data, onSaved }: Props) {
 
       <div>
         <Label className="text-xs font-bold text-slate-600">ผู้ให้บริการ AI</Label>
-        <div className="mt-2 grid gap-2 sm:grid-cols-2">
-          {data.providers.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => selectProvider(p.id)}
-              className={cn(
-                "flex items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors",
-                p.id === providerId ? "border-blue-500 bg-blue-50/60 ring-2 ring-blue-500/15" : "border-slate-200 hover:bg-slate-50"
-              )}
-            >
-              {p.isLocal ? <Cpu className="h-4 w-4 text-emerald-600" /> : <Cloud className="h-4 w-4 text-blue-600" />}
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-bold text-slate-800">{p.label}</p>
-                <p className="text-[11px] text-slate-500">{p.isLocal ? "ประมวลผลในเครื่อง" : p.hasKey ? "มี API key แล้ว" : "ต้องใส่ API key"}</p>
-              </div>
-              {p.id === data.setting.aiProvider && <span className="rounded-md bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">ใช้อยู่</span>}
-            </button>
-          ))}
+        <div className="mt-2 flex items-center gap-2">
+          {provider.isLocal ? <Cpu className="h-4 w-4 shrink-0 text-emerald-600" /> : <Cloud className="h-4 w-4 shrink-0 text-blue-600" />}
+          <select
+            value={providerId}
+            onChange={(e) => selectProvider(e.target.value)}
+            aria-label="ผู้ให้บริการ AI"
+            className="h-9 min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800"
+          >
+            {data.providers.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+                {p.isLocal ? " — ประมวลผลในเครื่อง" : p.hasKey ? " — มี API key แล้ว" : " — ต้องใส่ API key"}
+                {p.id === data.setting.aiProvider ? " (ใช้อยู่)" : ""}
+              </option>
+            ))}
+          </select>
         </div>
+        {providerId !== data.setting.aiProvider && (
+          <p className="mt-1 text-[11px] text-slate-500">
+            ตอนนี้ใช้ {data.providers.find((p) => p.id === data.setting.aiProvider)?.label || data.setting.aiProvider} อยู่ — กด “ใช้ผู้ให้บริการและโมเดลนี้” ด้านล่างเพื่อเปลี่ยน
+          </p>
+        )}
       </div>
 
       {provider.isLocal ? (
