@@ -39,6 +39,8 @@ const iso = (d) => d.toISOString();
 const fake = {
   messages: new Map(), // id -> { meta, text }
   sent: [],
+  notifications: [], // อีเมลแจ้งเตือนนัดหมายที่ส่งถึงผู้ใช้
+  failNotify: false,
   events: [], // ปฏิทินของผู้ใช้
   created: new Map(), // idempotencyKey -> event
   calendarInserts: 0,
@@ -80,6 +82,15 @@ const mail = {
   async listMessageIdsSince() {
     return { ids: [...fake.messages.keys()], truncated: false };
   },
+  // เหมือน Gmail: before: เป็นวินาที ใหม่สุดก่อน
+  async listMessageIdsBefore({ before, maxMessages }) {
+    const limit = Math.floor(before.getTime() / 1000) * 1000;
+    const ids = [...fake.messages.values()]
+      .filter((m) => m.meta.receivedAt.getTime() < limit)
+      .sort((a, b) => b.meta.receivedAt - a.meta.receivedAt)
+      .map((m) => m.meta.providerMessageId);
+    return { ids: ids.slice(0, maxMessages) };
+  },
   async getMessageMeta(id) {
     if (fake.failMetaFor === id) throw new Error('network down');
     return fake.messages.get(id).meta;
@@ -96,13 +107,24 @@ const mail = {
         text: m.text,
         html: m.html,
         isRead: false,
+        attachments: (m.attachments || []).map(({ partId, filename, mimeType, data }) => ({ partId, filename, mimeType, size: data.length })),
       }));
+  },
+  async getAttachment(messageId, partId) {
+    const m = fake.messages.get(messageId);
+    const file = m?.attachments?.find((a) => a.partId === partId);
+    return file ? { threadId: m.meta.providerThreadId, filename: file.filename, mimeType: file.mimeType, data: file.data } : null;
   },
   async sendReply(payload) {
     if (fake.sendDelayMs) await sleep(fake.sendDelayMs);
     if (fake.failSend) throw new Error('smtp rejected');
     fake.sent.push(payload);
     return { id: `sent-${fake.sent.length}` };
+  },
+  async sendNotification(payload) {
+    if (fake.failNotify) throw new Error("quota exceeded");
+    fake.notifications.push(payload);
+    return { id: `notify-${fake.notifications.length}` };
   },
   async markRead() {},
   async getChangeCursor() {
@@ -841,4 +863,172 @@ test('multi-day: a one-day item can be extended to several days by the user, and
   // เปลี่ยนเป็นทั้งวันหลายวัน: ไม่ใช้การซ้ำ
   const allDay = await put({ isAllDay: true, startAt: iso(fieldDay(7, 0)), endAt: iso(fieldDay(9, 0)), repeatDays: 3 });
   assert.deepEqual([allDay.json.action.isAllDay, allDay.json.action.repeatDays], [true, 1]);
+});
+
+// ───────── แจ้งเตือนนัดหมายทางอีเมล ─────────
+const notificationsFor = (emailId) => fake.notifications.filter((n) => n.html.includes(`?email=${emailId}`));
+
+test('notify: a new appointment is emailed to the user once, with a link to the email', async () => {
+  addMessage(`${RUN}-notify`, { subject: 'นัดประชุมโครงการ (แจ้งเตือน)', text: 'ขอนัดประชุมโครงการ วันจันทร์หน้า เวลา 10:00 - 11:30 น. ห้อง 301' });
+  // ฉบับย้อนหลังที่ได้รับก่อนเชื่อมบัญชี (ดึงมาตอนเชื่อมครั้งแรก) ไม่แจ้ง
+  addMessage(`${RUN}-notify-old`, { subject: 'นัดประชุมโครงการ (เก่า)', text: 'ขอนัดประชุมโครงการ วันจันทร์หน้า เวลา 10:00 - 11:30 น.' });
+  fake.messages.get(`${RUN}-notify-old`).meta.receivedAt = new Date(account.createdAt.getTime() - 86400000);
+  await syncAccount(account.id);
+
+  const row = await emailRow(`${RUN}-notify`);
+  assert.equal((await analyzeEmail(row.id)).ok, true);
+  const sent = notificationsFor(row.id);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, account.emailAddress);
+  assert.match(sent[0].subject, /นัดหมายใหม่/);
+  assert.match(sent[0].html, /ร่างการตอบกลับ/); // ร่างตอบอัตโนมัติเสร็จก่อนแจ้ง
+  assert.ok((await emailRow(`${RUN}-notify`)).notifiedAt);
+
+  // วิเคราะห์ใหม่ไม่แจ้งซ้ำ
+  await analyzeEmail(row.id, { force: true });
+  assert.equal(notificationsFor(row.id).length, 1);
+
+  const old = await emailRow(`${RUN}-notify-old`);
+  assert.equal((await analyzeEmail(old.id)).ok, true);
+  assert.deepEqual([notificationsFor(old.id).length, (await emailRow(`${RUN}-notify-old`)).notifiedAt], [0, null]);
+});
+
+test('notify: respects the setting, and a failed send keeps the analysis and allows a retry', async () => {
+  addMessage(`${RUN}-notify-off`, { subject: 'นัดประชุมโครงการ (ปิดแจ้งเตือน)', text: 'ขอนัดประชุมโครงการ วันจันทร์หน้า เวลา 10:00 - 11:30 น.' });
+  addMessage(`${RUN}-notify-fail`, { subject: 'นัดประชุมโครงการ (ส่งไม่ผ่าน)', text: 'ขอนัดประชุมโครงการ วันจันทร์หน้า เวลา 10:00 - 11:30 น.' });
+  await syncAccount(account.id);
+
+  await prisma.userSetting.update({ where: { userId: user.id }, data: { notifyNewAppointments: false } });
+  const off = await emailRow(`${RUN}-notify-off`);
+  await analyzeEmail(off.id);
+  assert.equal(notificationsFor(off.id).length, 0);
+  await prisma.userSetting.update({ where: { userId: user.id }, data: { notifyNewAppointments: true } });
+
+  const failing = await emailRow(`${RUN}-notify-fail`);
+  fake.failNotify = true;
+  const result = await analyzeEmail(failing.id);
+  fake.failNotify = false;
+  const afterFail = await emailRow(`${RUN}-notify-fail`);
+  assert.deepEqual([result.ok, afterFail.analysisStatus, afterFail.notifiedAt, notificationsFor(failing.id).length], [true, 'DONE', null, 0]);
+  await analyzeEmail(failing.id, { force: true });
+  assert.equal(notificationsFor(failing.id).length, 1);
+
+  // เมลที่ไม่ใช่นัดหมายไม่แจ้ง
+  assert.equal(notificationsFor((await emailRow(`${RUN}-fyi`)).id).length, 0);
+});
+
+// ───────── ดึงอีเมลย้อนหลัง ─────────
+const { backfillChunk } = require('../src/workflows/backfillAccount');
+const { startBackfill, stopBackfill } = require('../src/jobs/backfillJob');
+
+test('backfill: fetches all older inbox mail in chunks as MANUAL, without duplicates, and the job leaves it alone', async () => {
+  overrideDeps({ backfillPauseMs: 0 });
+  const oldest = (await prisma.emailMessage.findFirst({ where: { mailAccountId: account.id }, orderBy: { receivedAt: 'asc' } })).receivedAt;
+  // เมลเก่า 450 ฉบับ (ย้อนไปทีละชั่วโมง) + โปรโมชัน 1 ฉบับ — มากกว่าหนึ่งช่วง (200)
+  for (let i = 1; i <= 450; i += 1) {
+    addMessage(`${RUN}-old-${i}`, { subject: `เมลเก่า ${i}`, text: 'ขอนัดประชุมโครงการ วันจันทร์หน้า เวลา 10:00 - 11:30 น.' });
+    fake.messages.get(`${RUN}-old-${i}`).meta.receivedAt = new Date(oldest.getTime() - i * 3600 * 1000);
+  }
+  addMessage(`${RUN}-old-promo`, { subject: 'โปรเก่า', text: 'ลดราคา', labels: ['INBOX', 'CATEGORY_PROMOTIONS'] });
+  fake.messages.get(`${RUN}-old-promo`).meta.receivedAt = new Date(oldest.getTime() - 10 * 60 * 1000);
+
+  // ช่วงแรกช่วงเดียว แล้วหยุด (เหมือนผู้ใช้กดหยุด) — ทำต่อจากตำแหน่งเดิมได้
+  const first = await backfillChunk(account.id);
+  assert.deepEqual([first.done, first.created], [false, 200]);
+  const paused = await prisma.mailAccount.findUnique({ where: { id: account.id } });
+  assert.equal(paused.backfillCursor.getTime(), first.cursor.getTime());
+
+  const listed = await api('/api/accounts');
+  assert.deepEqual([listed.json.items[0].backfill.status, listed.json.items[0].backfill.count], ['paused', 200]);
+
+  // ทำต่อจนจบผ่าน job
+  const result = await startBackfill(account.id, { wait: true });
+  assert.deepEqual([result.status, result.created], ['done', 251]);
+  const done = await prisma.mailAccount.findUnique({ where: { id: account.id } });
+  assert.ok(done.backfillDoneAt);
+  assert.equal(done.backfillCount, 451);
+  assert.equal(done.backfillCursor.getTime(), oldest.getTime() - 450 * 3600 * 1000);
+
+  const rows = await prisma.emailMessage.findMany({ where: { mailAccountId: account.id, providerMessageId: { startsWith: `${RUN}-old-` } } });
+  assert.equal(rows.length, 451);
+  assert.equal(rows.filter((r) => r.analysisStatus === 'MANUAL').length, 450);
+  assert.equal(rows.find((r) => r.providerMessageId === `${RUN}-old-promo`).analysisStatus, 'SKIPPED');
+
+  // ดึงซ้ำไม่สร้างแถวซ้ำ
+  await prisma.mailAccount.update({ where: { id: account.id }, data: { backfillCursor: oldest, backfillDoneAt: null } });
+  await startBackfill(account.id, { wait: true });
+  assert.equal(await prisma.emailMessage.count({ where: { mailAccountId: account.id, providerMessageId: { startsWith: `${RUN}-old-` } } }), 451);
+
+  // งานวิเคราะห์อัตโนมัติไม่หยิบอีเมลย้อนหลัง
+  await prisma.userSetting.update({ where: { userId: user.id }, data: { isAutoAnalyzeActive: true } });
+  const callsBefore = fake.aiCalls.length;
+  await runAnalyzeJob(undefined, { accountIds: [account.id] });
+  await prisma.userSetting.update({ where: { userId: user.id }, data: { isAutoAnalyzeActive: false } });
+  const stillManual = await emailRow(`${RUN}-old-1`);
+  assert.equal(stillManual.analysisStatus, 'MANUAL');
+  assert.ok(!fake.aiCalls.slice(callsBefore).some((p) => p.includes('เมลเก่า')));
+
+  // กดวิเคราะห์เองได้ และไม่ส่งแจ้งเตือน (ได้รับก่อนเชื่อมบัญชี)
+  const http = await api(`/api/emails/${stillManual.id}/analyze`, { method: 'POST' });
+  assert.equal(http.status, 200);
+  assert.equal(http.json.analysisStatus, 'DONE');
+  assert.equal(fake.notifications.filter((n) => n.html.includes(`?email=${stillManual.id}`)).length, 0);
+});
+
+test('backfill: http start/stop is limited to the owner and reports progress', async () => {
+  const other = await api(`/api/accounts/${account.id}/backfill`, { method: 'POST', token: signUserToken(otherUser) });
+  assert.equal(other.status, 404);
+  const otherStop = await api(`/api/accounts/${account.id}/backfill/stop`, { method: 'POST', token: signUserToken(otherUser) });
+  assert.equal(otherStop.status, 404);
+
+  const started = await api(`/api/accounts/${account.id}/backfill`, { method: 'POST' });
+  assert.equal(started.status, 202);
+  assert.ok(['running', 'done'].includes(started.json.account.backfill.status));
+  const stopped = await api(`/api/accounts/${account.id}/backfill/stop`, { method: 'POST' });
+  assert.equal(stopped.status, 200);
+  // รอให้งานเบื้องหลังที่อาจยังวิ่งอยู่จบ ก่อนลบข้อมูลทดสอบ
+  for (let i = 0; i < 50 && require('../src/jobs/backfillJob').isBackfillRunning(account.id); i += 1) await sleep(50);
+  await stopBackfill(account.id);
+});
+
+// ───────── ไฟล์แนบ ─────────
+test('attachments: listed in the detail, served to the owner only, and unsafe types are downloaded not rendered', async () => {
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]);
+  addMessage(`${RUN}-att`, { subject: 'ทดสอบส่งรูป', text: 'ทดสอบส่งรูป' });
+  fake.messages.get(`${RUN}-att`).attachments = [
+    { partId: '1', filename: '51639_0.jpg', mimeType: 'image/jpeg', data: jpeg },
+    { partId: '2', filename: 'รายงาน.pdf', mimeType: 'application/pdf', data: Buffer.from('%PDF-1.4') },
+    { partId: '3', filename: 'logo.svg', mimeType: 'image/svg+xml', data: Buffer.from('<svg onload="alert(1)"/>') },
+  ];
+  await syncAccount(account.id);
+  const row = await emailRow(`${RUN}-att`);
+
+  const detail = await api(`/api/emails/${row.id}`);
+  assert.deepEqual(
+    detail.json.messages[0].attachments.map((a) => [a.partId, a.filename, a.size]),
+    [['1', '51639_0.jpg', 8], ['2', 'รายงาน.pdf', 8], ['3', 'logo.svg', 24]]
+  );
+
+  const raw = (path, token = signUserToken(user)) => fetch(`${baseUrl}${path}`, { headers: { Authorization: `Bearer ${token}` } });
+  const base = `/api/emails/${row.id}/attachments/${RUN}-att`;
+
+  const image = await raw(`${base}/1`);
+  assert.equal(image.status, 200);
+  assert.equal(image.headers.get('content-type'), 'image/jpeg');
+  assert.match(image.headers.get('content-disposition'), /^inline;/);
+  assert.equal(image.headers.get('x-content-type-options'), 'nosniff');
+  assert.deepEqual(Buffer.from(await image.arrayBuffer()), jpeg);
+
+  const pdf = await raw(`${base}/2`);
+  assert.equal(pdf.headers.get('content-type'), 'application/octet-stream');
+  assert.match(pdf.headers.get('content-disposition'), /^attachment; filename\*=UTF-8''%E0%B8%A3/);
+
+  const svg = await raw(`${base}/3`);
+  assert.equal(svg.headers.get('content-type'), 'application/octet-stream'); // SVG มีสคริปต์ได้ ไม่แสดงตรง ๆ
+  assert.match(svg.headers.get('content-disposition'), /^attachment;/);
+
+  assert.equal((await raw(`${base}/1`, signUserToken(otherUser))).status, 404); // อีเมลของคนอื่น
+  assert.equal((await raw(`/api/emails/${row.id}/attachments/${RUN}-appt/1`)).status, 404); // ข้อความจากเธรดอื่น
+  assert.equal((await raw(`${base}/9`)).status, 404);
+  assert.equal((await raw(`${base}/abc`)).status, 400);
 });

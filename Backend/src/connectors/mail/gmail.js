@@ -2,25 +2,58 @@
 // ทุกตัวเชื่อมอีเมลต้องมีฟังก์ชันชุดเดียวกับที่ไฟล์นี้คืน (ดู connectors/mail/index.js)
 const { google } = require('googleapis');
 const { authClientForAccount, withGoogleErrors } = require('../google/client');
-const { parseAddress } = require('../../utils/emailText');
+const { parseAddress, replaceCidImages } = require('../../utils/emailText');
+
+// ขนาดรวมของรูปที่แนบในเมลที่ฝังกลับเข้า HTML ต่อหนึ่งเธรด (รูปที่เกินจะไม่แสดง)
+const INLINE_IMAGE_BUDGET = 5 * 1024 * 1024;
 
 const header = (headers, name) =>
   (headers || []).find((h) => h.name.toLowerCase() === name.toLowerCase())?.value || '';
 
 const decode = (data) => (data ? Buffer.from(data, 'base64').toString('utf8') : '');
 
-/** รวมส่วน text/plain และ text/html จากโครงสร้าง MIME (ข้ามไฟล์แนบ) */
+/**
+ * รวมส่วน text/plain และ text/html จากโครงสร้าง MIME
+ * และเก็บรายการไฟล์ (ไฟล์แนบ และรูปที่ HTML อ้างด้วย cid:) แยกไว้
+ */
 const extractBodies = (payload) => {
-  const out = { text: '', html: '' };
+  const out = { text: '', html: '', files: [] };
   const walk = (part) => {
     if (!part) return;
-    if (part.filename) return;
+    const cid = header(part.headers, 'Content-ID').replace(/^<|>$/g, '').trim() || null;
+    const isFile = Boolean(part.filename) || Boolean(part.body?.attachmentId) || (cid && /^image\//i.test(part.mimeType || ''));
+    if (isFile) {
+      out.files.push({
+        partId: part.partId,
+        filename: part.filename || '',
+        mimeType: part.mimeType || 'application/octet-stream',
+        size: Number(part.body?.size) || 0,
+        cid,
+        data: part.body?.data || null,
+        attachmentId: part.body?.attachmentId || null,
+      });
+      return;
+    }
     if (part.mimeType === 'text/plain' && part.body?.data) out.text += decode(part.body.data);
     else if (part.mimeType === 'text/html' && part.body?.data) out.html += decode(part.body.data);
     (part.parts || []).forEach(walk);
   };
   walk(payload);
   return out;
+};
+
+/** HTML อ้างถึงไฟล์นี้ด้วย cid: (เป็นรูปในเนื้อเมล ไม่ใช่ไฟล์แนบที่ต้องแสดงแยก) */
+const referencedByHtml = (html, file) => Boolean(file.cid) && html.toLowerCase().includes(`cid:${file.cid.toLowerCase()}`);
+
+/** หาส่วนของข้อความตาม partId (เช่น "1", "0.2") */
+const findPart = (part, partId) => {
+  if (!part) return null;
+  if (part.partId === partId) return part;
+  for (const child of part.parts || []) {
+    const found = findPart(child, partId);
+    if (found) return found;
+  }
+  return null;
 };
 
 const toMeta = (data) => {
@@ -46,22 +79,52 @@ const encodeRaw = (lines) =>
 const createGmailConnector = (account) => {
   const gmail = google.gmail({ version: 'v1', auth: authClientForAccount(account) });
 
+  const listIds = async (q, maxMessages) => {
+    const ids = [];
+    let pageToken;
+    do {
+      const res = await withGoogleErrors(() =>
+        gmail.users.messages.list({ userId: 'me', q, maxResults: Math.min(100, maxMessages), pageToken })
+      );
+      for (const m of res.data.messages || []) ids.push(m.id);
+      pageToken = res.data.nextPageToken;
+    } while (pageToken && ids.length < maxMessages);
+    return { ids: ids.slice(0, maxMessages), truncated: Boolean(pageToken) || ids.length > maxMessages };
+  };
+
+  /** ดึงข้อมูลรูปที่ HTML อ้างถึงจริง แล้วแทน cid: ด้วย data URI ภายในงบขนาดที่เหลือ */
+  const inlineImagesOf = async (messageId, html, images, budget) => {
+    const resolved = [];
+    for (const image of images) {
+      if (image.size > budget.left) continue;
+      let data = image.data;
+      if (!data && image.attachmentId) {
+        try {
+          const res = await gmail.users.messages.attachments.get({ userId: 'me', messageId, id: image.attachmentId });
+          data = res.data.data;
+        } catch {
+          continue; // ดึงรูปไม่ได้ก็ยังแสดงเนื้อหาเมลได้ เพียงรูปนั้นไม่ขึ้น
+        }
+      }
+      if (!data) continue;
+      budget.left -= image.size || Math.floor((data.length * 3) / 4);
+      resolved.push({ ...image, data });
+    }
+    return replaceCidImages(html, resolved);
+  };
+
   return {
     provider: 'GOOGLE',
 
     /** รหัสข้อความในกล่องขาเข้าที่ใหม่กว่า since ไล่ทุกหน้าจนหมดหรือครบ maxMessages */
     async listMessageIdsSince({ since, maxMessages = 300 }) {
-      const q = `in:inbox -from:me after:${Math.floor(since.getTime() / 1000)}`;
-      const ids = [];
-      let pageToken;
-      do {
-        const res = await withGoogleErrors(() =>
-          gmail.users.messages.list({ userId: 'me', q, maxResults: 100, pageToken })
-        );
-        for (const m of res.data.messages || []) ids.push(m.id);
-        pageToken = res.data.nextPageToken;
-      } while (pageToken && ids.length < maxMessages);
-      return { ids: ids.slice(0, maxMessages), truncated: Boolean(pageToken) || ids.length > maxMessages };
+      return listIds(`in:inbox -from:me after:${Math.floor(since.getTime() / 1000)}`, maxMessages);
+    },
+
+    /** รหัสข้อความในกล่องขาเข้าที่เก่ากว่า before (ใหม่สุดก่อน) — ใช้ดึงอีเมลย้อนหลัง */
+    async listMessageIdsBefore({ before, maxMessages = 200 }) {
+      const { ids } = await listIds(`in:inbox -from:me before:${Math.floor(before.getTime() / 1000)}`, maxMessages);
+      return { ids };
     },
 
     async getMessageMeta(messageId) {
@@ -76,25 +139,59 @@ const createGmailConnector = (account) => {
       return toMeta(res.data);
     },
 
-    /** ข้อความทั้งเธรดเรียงตามเวลา: [{ id, from, subject, date, text, html, isRead }] */
-    async getThread(threadId) {
+    /**
+     * ข้อความทั้งเธรดเรียงตามเวลา: [{ id, from, subject, date, text, html, isRead, attachments }]
+     * attachments: ไฟล์แนบที่ไม่ได้อยู่ในเนื้อเมล [{ partId, filename, mimeType, size }]
+     * inlineImages: ฝังรูปที่แนบในเนื้อเมลเป็น data URI (ใช้ตอนแสดงผล ไม่ใช้ตอนส่งให้ AI)
+     */
+    async getThread(threadId, { inlineImages = false } = {}) {
       const res = await withGoogleErrors(() =>
         gmail.users.threads.get({ userId: 'me', id: threadId, format: 'full' })
       );
-      return (res.data.messages || []).map((msg) => {
+      const budget = { left: INLINE_IMAGE_BUDGET };
+      const out = [];
+      for (const msg of res.data.messages || []) {
         const headers = msg.payload?.headers;
         const bodies = extractBodies(msg.payload);
-        return {
+        const inBody = bodies.files.filter((f) => /^image\//i.test(f.mimeType) && referencedByHtml(bodies.html, f));
+        const html =
+          inlineImages && inBody.length ? await inlineImagesOf(msg.id, bodies.html, inBody, budget) : bodies.html;
+        out.push({
           id: msg.id,
           from: header(headers, 'From'),
           subject: header(headers, 'Subject'),
           date: header(headers, 'Date') || new Date(Number(msg.internalDate)).toISOString(),
           receivedAt: new Date(Number(msg.internalDate) || Date.now()).toISOString(),
           text: bodies.text,
-          html: bodies.html,
+          html,
           isRead: !(msg.labelIds || []).includes('UNREAD'),
-        };
-      });
+          attachments: bodies.files
+            .filter((f) => !inBody.includes(f) && f.partId)
+            .map(({ partId, filename, mimeType, size }) => ({ partId, filename, mimeType, size })),
+        });
+      }
+      return out;
+    },
+
+    /** ไฟล์แนบหนึ่งไฟล์: { threadId, filename, mimeType, data: Buffer } หรือ null ถ้าไม่พบ */
+    async getAttachment(messageId, partId) {
+      const res = await withGoogleErrors(() => gmail.users.messages.get({ userId: 'me', id: messageId, format: 'full' }));
+      const part = findPart(res.data.payload, partId);
+      if (!part) return null;
+      let data = part.body?.data || null;
+      if (!data && part.body?.attachmentId) {
+        const att = await withGoogleErrors(() =>
+          gmail.users.messages.attachments.get({ userId: 'me', messageId, id: part.body.attachmentId })
+        );
+        data = att.data.data;
+      }
+      if (!data) return null;
+      return {
+        threadId: res.data.threadId,
+        filename: part.filename || '',
+        mimeType: part.mimeType || 'application/octet-stream',
+        data: Buffer.from(data, 'base64'),
+      };
     },
 
     /** ตอบกลับข้อความในเธรดเดิม คืน { id } ของข้อความที่ส่งออก */
@@ -130,6 +227,21 @@ const createGmailConnector = (account) => {
       const res = await withGoogleErrors(() =>
         gmail.users.messages.send({ userId: 'me', requestBody: { raw, threadId } })
       );
+      return { id: res.data.id };
+    },
+
+    /** ส่งอีเมล HTML ฉบับใหม่ (ใช้แจ้งเตือนผู้ใช้เอง) — html ต้อง escape ค่าจากอีเมลมาแล้ว */
+    async sendNotification({ to, subject, html }) {
+      const raw = encodeRaw([
+        `To: ${to}`,
+        `Subject: =?utf-8?B?${Buffer.from(subject).toString('base64')}?=`,
+        'MIME-Version: 1.0',
+        'Content-Type: text/html; charset="UTF-8"',
+        'Content-Transfer-Encoding: base64',
+        '',
+        Buffer.from(html).toString('base64'),
+      ]);
+      const res = await withGoogleErrors(() => gmail.users.messages.send({ userId: 'me', requestBody: { raw } }));
       return { id: res.data.id };
     },
 

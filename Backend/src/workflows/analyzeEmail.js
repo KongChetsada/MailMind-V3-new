@@ -9,9 +9,11 @@ const { normalizeTimeZone } = require('../core/time');
 const { evaluateAvailability } = require('./availability');
 const { linkToExisting } = require('../core/threadLinking');
 const { generateDraft } = require('./generateDraft');
+const { notifyAppointment } = require('./notifyAppointment');
 
 const CLAIMABLE = ['PENDING', 'FAILED'];
-const CLAIMABLE_FORCED = ['PENDING', 'FAILED', 'DONE', 'SKIPPED'];
+// ผู้ใช้กดเอง: วิเคราะห์ได้ทุกสถานะที่ไม่ได้กำลังทำงานอยู่ รวมอีเมลย้อนหลัง (MANUAL)
+const CLAIMABLE_FORCED = ['PENDING', 'FAILED', 'DONE', 'SKIPPED', 'MANUAL'];
 // รายการเดิมในเธรดที่ยังมีผล (ใช้ผูกกับรายการใหม่)
 const LIVE_ITEM_STATUSES = ['SUGGESTED', 'CREATING', 'CREATED'];
 // รายการที่ผู้ใช้ยังไม่ได้ลงปฏิทิน ถูกแทนที่เมื่อวิเคราะห์ใหม่
@@ -168,6 +170,13 @@ const analyzeEmail = async (emailId, options = {}, deps = getDeps()) => {
       } catch (draftError) {
         logger.warn('AUTO_DRAFT_FAILED', 'Automatic draft generation failed', { error: draftError.message });
       }
+    }
+
+    // แจ้งเตือนทางอีเมล (หลังร่างตอบ เพื่อบอกได้ว่ามีร่างรออยู่) — ล้มเหลวได้โดยผลวิเคราะห์ยังอยู่
+    try {
+      await notifyAppointment(emailId, deps);
+    } catch (notifyError) {
+      logger.warn('NOTIFY_FAILED', 'Appointment notification failed', { error: notifyError.message });
     }
 
     return { claimed: true, ok: true, category: result.category };

@@ -44,6 +44,7 @@ enum AnalysisStatus {
   DONE
   FAILED // AI ล้มเหลวหรือผลลัพธ์ไม่ผ่าน schema — แสดงให้ผู้ใช้เห็นและกดลองใหม่ได้
   SKIPPED // ข้ามด้วยกฎ (เช่น โปรโมชัน) ไม่ได้เรียก AI
+  MANUAL // อีเมลย้อนหลัง: งานอัตโนมัติไม่วิเคราะห์ ผู้ใช้กดวิเคราะห์เองรายฉบับ
 }
 
 enum ActionKind {
@@ -126,6 +127,8 @@ model UserSetting {
 
   // AI
   isAutoAnalyzeActive Boolean @default(true)
+  // ส่งอีเมลแจ้งเตือนถึงตัวผู้ใช้เมื่อพบนัดหมายใหม่รอยืนยัน
+  notifyNewAppointments Boolean @default(true)
   aiProvider          String  @default("ollama") // ollama | openai | openrouter | gemini | ...
   aiModel             String?
   // ไม่มีการสลับผู้ให้บริการอัตโนมัติ: ถ้า provider ที่เลือกล้มเหลว เมลจะเป็น FAILED
@@ -187,6 +190,13 @@ model MailAccount {
   // ตำแหน่งล่าสุดของบันทึกการเปลี่ยนแปลงฝั่งผู้ให้บริการ (Gmail historyId) ใช้ตามการลบ/ย้ายลงถังขยะ/อ่านแล้ว
   changeCursor  String?
 
+  // ดึงอีเมลย้อนหลัง (ผู้ใช้สั่งเอง): ไล่จากใหม่ไปเก่าทีละช่วง ทำต่อจาก backfillCursor ได้เมื่อหยุดหรือเซิร์ฟเวอร์รีสตาร์ต
+  backfillCursor    DateTime? // ดึงย้อนถึงเวลานี้แล้ว รอบถัดไปดึงฉบับที่เก่ากว่า
+  backfillStartedAt DateTime? // มีค่าและยังไม่จบ = กำลังทำ (ทำต่อเมื่อเซิร์ฟเวอร์เริ่ม)
+  backfillDoneAt    DateTime?
+  backfillCount     Int       @default(0)
+  backfillError     String?
+
   emails EmailMessage[]
 
   createdAt DateTime @default(now())
@@ -228,6 +238,9 @@ model EmailMessage {
 
   // ถูกลบ/ย้ายลงถังขยะ/ทำเป็นสแปมฝั่งผู้ให้บริการ: ซ่อนจาก Inbox แต่เก็บประวัติและสถิติไว้
   removedAt DateTime?
+
+  // เวลาที่ส่งอีเมลแจ้งเตือนนัดหมายของฉบับนี้ (ส่งครั้งเดียวต่อฉบับ)
+  notifiedAt DateTime?
 
   // ผู้ใช้แก้ประเภทเอง (เก็บแยกเพื่อวัดความถูกต้องของ AI)
   userCategory EmailCategory?

@@ -14,6 +14,7 @@ const optionalText = (max) => z.union([z.string().trim().max(max), z.null()]).op
 const settingsSchema = z
   .object({
     isAutoAnalyzeActive: z.boolean().optional(),
+    notifyNewAppointments: z.boolean().optional(),
     aiProvider: z.string().max(40).optional(),
     aiModel: optionalText(120),
     startTime: time.optional(),

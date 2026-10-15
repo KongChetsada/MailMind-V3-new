@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Notice, Spinner } from "@/components/common/Feedback";
 import { api, errorMessage } from "@/lib/api";
+import { useAuth } from "@/provider/AuthProvider";
 import type { SettingsResponse } from "@/lib/types";
 
 interface Props {
@@ -17,6 +18,7 @@ interface Props {
 
 /** เลือกผู้ให้บริการ AI โมเดล และจัดการ API key */
 export default function AiSettings({ data, onSaved }: Props) {
+  const { user } = useAuth();
   const [providerId, setProviderId] = useState(data.setting.aiProvider);
   const [model, setModel] = useState(data.setting.aiModel || "");
   const [models, setModels] = useState<string[]>([]);
@@ -87,9 +89,9 @@ export default function AiSettings({ data, onSaved }: Props) {
       return "บันทึกการตั้งค่า AI แล้ว";
     });
 
-  const toggleAuto = async (value: boolean) => {
+  const toggle = async (field: "isAutoAnalyzeActive" | "notifyNewAppointments", value: boolean) => {
     try {
-      onSaved(await api.settings.update({ isAutoAnalyzeActive: value }));
+      onSaved(await api.settings.update({ [field]: value }));
     } catch (e) {
       setMessage({ tone: "error", text: errorMessage(e) });
     }
@@ -102,7 +104,17 @@ export default function AiSettings({ data, onSaved }: Props) {
           <p className="text-sm font-bold text-slate-800">วิเคราะห์อีเมลใหม่อัตโนมัติ</p>
           <p className="text-xs text-slate-500">ปิดไว้ = อีเมลยังถูกดึงเข้ามา แต่จะวิเคราะห์เมื่อคุณกดเองทีละฉบับ</p>
         </div>
-        <Switch checked={data.setting.isAutoAnalyzeActive} onCheckedChange={toggleAuto} />
+        <Switch checked={data.setting.isAutoAnalyzeActive} onCheckedChange={(v) => toggle("isAutoAnalyzeActive", v)} />
+      </div>
+
+      <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+        <div>
+          <p className="text-sm font-bold text-slate-800">แจ้งเตือนทางอีเมลเมื่อพบนัดหมายใหม่</p>
+          <p className="text-xs text-slate-500">
+            ส่งไปที่ {user?.email || "อีเมลบัญชีที่เชื่อมไว้"} ครั้งเดียวต่ออีเมลหนึ่งฉบับ เฉพาะนัดหมาย/เลื่อนนัดที่รอยืนยัน
+          </p>
+        </div>
+        <Switch checked={data.setting.notifyNewAppointments} onCheckedChange={(v) => toggle("notifyNewAppointments", v)} />
       </div>
 
       <div>

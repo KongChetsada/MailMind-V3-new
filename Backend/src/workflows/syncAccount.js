@@ -2,8 +2,8 @@
 // เรียกซ้ำได้อย่างปลอดภัย — อีเมลฉบับเดิมไม่ถูกสร้างซ้ำ และตำแหน่งซิงก์เลื่อนเมื่อดึงครบเท่านั้น
 const { getDeps } = require('./deps');
 const { env } = require('../config/env');
-const { SKIP_PROVIDER_LABELS } = require('../core/categories');
 const { applyProviderChanges } = require('./applyProviderChanges');
+const { toEmailRow, isSkippedByRule } = require('./emailRow');
 
 const OVERLAP_MS = 5 * 60 * 1000;
 const FETCH_BATCH = 5;
@@ -38,17 +38,8 @@ const syncAccount = async (accountId, deps = getDeps()) => {
     for (let i = 0; i < newIds.length; i += FETCH_BATCH) {
       const metas = await Promise.all(newIds.slice(i, i + FETCH_BATCH).map((id) => mail.getMessageMeta(id)));
       for (const meta of metas) {
-        const skip = (meta.labels || []).some((label) => SKIP_PROVIDER_LABELS.includes(label));
-        const data = {
-          providerThreadId: meta.providerThreadId,
-          fromName: meta.fromName,
-          fromAddress: meta.fromAddress,
-          subject: meta.subject,
-          snippet: meta.snippet,
-          receivedAt: meta.receivedAt,
-          isRead: meta.isRead,
-          ...(skip ? { analysisStatus: 'SKIPPED', category: 'OTHER', priority: 'LOW' } : {}),
-        };
+        const skip = isSkippedByRule(meta);
+        const data = toEmailRow(meta, 'PENDING');
         // upsert ป้องกันแถวซ้ำเมื่อมีการซิงก์สองรอบซ้อนกัน
         await prisma.emailMessage.upsert({
           where: {

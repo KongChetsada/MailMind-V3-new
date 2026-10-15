@@ -30,7 +30,7 @@ const getStats = async (userId, days = 30) => {
     }),
   ]);
 
-  const byStatus = Object.fromEntries(['PENDING', 'PROCESSING', 'DONE', 'FAILED', 'SKIPPED'].map((s) => [s, 0]));
+  const byStatus = Object.fromEntries(['PENDING', 'PROCESSING', 'DONE', 'FAILED', 'SKIPPED', 'MANUAL'].map((s) => [s, 0]));
   const byCategory = Object.fromEntries(CATEGORY_CODES.map((c) => [c, 0]));
   const perDay = new Map();
   let corrected = 0;

@@ -553,3 +553,51 @@ test('thread linking: a detail on any day of a repeated item links to it', () =>
   assert.equal(rel('2026-10-22T01:00:00Z'), 'DETAIL'); // วันที่สอง
   assert.equal(rel('2026-10-23T01:00:00Z'), null); // หลังจบ
 });
+
+// ───── notifications ─────
+const { escapeHtml, pickNotifiableItems, buildAppointmentNotification } = require('../src/core/notifications');
+
+test('notifications: only pending appointment events that are not over are picked', () => {
+  const ev = (over) => ({ kind: 'EVENT', status: 'SUGGESTED', title: 'ประชุม', startAt: new Date('2026-08-24T03:00:00Z'), endAt: new Date('2026-08-24T04:00:00Z'), isTimeSpecified: true, ...over });
+  const pick = (items, category = 'APPOINTMENT') => pickNotifiableItems({ category, items, now: NOW, timezone: TZ });
+  assert.equal(pick([ev()]).length, 1);
+  assert.equal(pick([ev()], 'EVENT_INVITATION').length, 0); // ประเภทอื่นไม่แจ้ง
+  assert.equal(pick([ev({ kind: 'DEADLINE' })]).length, 0);
+  assert.equal(pick([ev({ status: 'CREATED' })]).length, 0); // ลงปฏิทินแล้ว
+  assert.equal(pick([ev({ startAt: new Date('2026-08-10T03:00:00Z'), endAt: new Date('2026-08-10T04:00:00Z') })]).length, 0); // ผ่านไปแล้ว
+  assert.equal(pick([ev({ startAt: null, endAt: null })]).length, 1); // ยังไม่มีวันที่ ผู้ใช้ต้องเข้าไปเติม
+  // กิจกรรมหลายวันที่วันแรกผ่านไปแล้ว แต่วันสุดท้ายยังไม่ถึง
+  assert.equal(pick([ev({ startAt: new Date('2026-08-19T02:00:00Z'), endAt: new Date('2026-08-19T08:00:00Z'), repeatDays: 3 })]).length, 1);
+});
+
+test('notifications: content from the email is escaped and reschedules get their own subject', () => {
+  const item = { kind: 'EVENT', status: 'SUGGESTED', title: '<script>x</script>', startAt: new Date('2026-08-24T03:00:00Z'), endAt: new Date('2026-08-24T04:00:00Z'), isTimeSpecified: true, repeatDays: 2, availability: 'CONFLICT', availabilityReason: 'ชนกับ "ประชุมทีม"' };
+  const email = { fromName: 'A <b>B</b>', fromAddress: 'a@x.com', subject: 'นัด <img src=x onerror=alert(1)>' };
+  const n = buildAppointmentNotification({ email, items: [item], timezone: TZ, inboxUrl: 'http://localhost:3000/inbox?email=e1', hasDraft: true });
+  assert.match(n.subject, /นัดหมายใหม่/);
+  assert.ok(!n.html.includes('<script>') && !n.html.includes('<img') && !n.html.includes('<b>B'));
+  assert.ok(n.html.includes('&lt;script&gt;'));
+  assert.match(n.html, /วันจันทร์ที่ 24 สิงหาคม 2569 เวลา 10:00 - 11:00 น\. · ทุกวัน รวม 2 วัน/);
+  assert.match(n.html, /ชนกับ &quot;ประชุมทีม&quot;/);
+  assert.match(n.html, /href="http:\/\/localhost:3000\/inbox\?email=e1"/);
+  assert.match(n.html, /ร่างการตอบกลับ/);
+  const r = buildAppointmentNotification({ email, items: [{ ...item, relation: 'RESCHEDULE' }], timezone: TZ, inboxUrl: 'u', hasDraft: false });
+  assert.match(r.subject, /ขอเลื่อนนัด/);
+  assert.equal(escapeHtml(`a&'"`), 'a&amp;&#39;&quot;');
+});
+
+// ───── inline images ─────
+const { toStandardBase64, replaceCidImages } = require('../src/utils/emailText');
+
+test('inline images: cid references become data URIs, others stay untouched', () => {
+  assert.equal(toStandardBase64('ab-_cd'), 'ab+/cd==');
+  assert.equal(toStandardBase64('abcd'), 'abcd');
+  const html = '<p><img src="cid:logo@x"> <img src=\'CID:logo@x\'> <img src="cid:missing"> <img src="cid:logo@xyz"></p>';
+  const out = replaceCidImages(html, [
+    { cid: 'logo@x', mimeType: 'image/png', data: 'iVBO-_' },
+    { cid: 'nodata', mimeType: 'image/png', data: null },
+  ]);
+  assert.equal((out.match(/data:image\/png;base64,iVBO\+\/==/g) || []).length, 2); // ไม่สนตัวพิมพ์เล็กใหญ่ของ cid:
+  assert.ok(out.includes('src="cid:missing"')); // ไม่มีข้อมูล → คงเดิม (หน้าเว็บตัด src ทิ้งเอง)
+  assert.ok(out.includes('src="cid:logo@xyz"')); // cid ที่ขึ้นต้นเหมือนกันไม่ถูกแทนผิดตัว
+});

@@ -144,7 +144,7 @@ const getEmailDetail = async (userId, emailId) => {
   let messages = [];
   let threadError = email.removedAt ? 'อีเมลนี้ถูกลบหรือย้ายลงถังขยะในกล่องจดหมายแล้ว' : null;
   if (!email.removedAt) try {
-    const thread = await getDeps().getMail(email.mailAccount).getThread(email.providerThreadId);
+    const thread = await getDeps().getMail(email.mailAccount).getThread(email.providerThreadId, { inlineImages: true });
     messages = thread.map((m) => ({
       id: m.id,
       from: m.from,
@@ -152,6 +152,7 @@ const getEmailDetail = async (userId, emailId) => {
       receivedAt: m.receivedAt,
       text: m.text,
       html: m.html,
+      attachments: m.attachments || [],
       isCurrent: m.id === email.providerMessageId,
     }));
   } catch (error) {
@@ -195,4 +196,17 @@ const updateEmail = async (userId, emailId, { userCategory, isRead }) => {
   return getEmailDetail(userId, emailId);
 };
 
-module.exports = { listEmails, getCounts, getEmailDetail, updateEmail, findOwnedEmail, toActionDto, toDraftDto };
+/**
+ * ไฟล์แนบหนึ่งไฟล์ของข้อความในเธรดของอีเมลนี้ — ข้อความจากเธรดอื่นถือว่าไม่พบ
+ * คืน { filename, mimeType, data: Buffer }
+ */
+const getAttachmentFile = async (userId, emailId, messageId, partId) => {
+  const email = await findOwnedEmail(userId, emailId, { mailAccount: true });
+  const mail = getDeps().getMail(email.mailAccount);
+  if (typeof mail.getAttachment !== 'function') throw notFound('ไม่พบไฟล์แนบ');
+  const file = await mail.getAttachment(messageId, partId);
+  if (!file || file.threadId !== email.providerThreadId) throw notFound('ไม่พบไฟล์แนบ');
+  return file;
+};
+
+module.exports = { listEmails, getCounts, getEmailDetail, updateEmail, findOwnedEmail, getAttachmentFile, toActionDto, toDraftDto };

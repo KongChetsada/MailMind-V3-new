@@ -88,4 +88,27 @@ router.post('/:id/draft', validate(draftBody), async (req, res) => {
   res.json({ draft: emails.toDraftDto(draft) });
 });
 
+// รูปที่แสดงในหน้าเว็บได้ตรง ๆ (SVG มีสคริปต์ได้ จึงให้ดาวน์โหลดแทน)
+const PREVIEWABLE = /^image\/(jpeg|png|gif|webp|bmp)$/i;
+const attachmentParams = z.object({
+  messageId: z.string().regex(/^[\w-]{1,100}$/),
+  partId: z.string().regex(/^\d+(\.\d+)*$/),
+});
+
+// GET /api/emails/:id/attachments/:messageId/:partId — ไฟล์แนบของข้อความในเธรดของอีเมลนี้
+router.get('/:id/attachments/:messageId/:partId', async (req, res) => {
+  const params = attachmentParams.parse(req.params);
+  const file = await emails.getAttachmentFile(req.user.id, req.params.id, params.messageId, params.partId);
+  const inline = PREVIEWABLE.test(file.mimeType);
+  const filename = file.filename || 'attachment';
+  res.set({
+    'Content-Type': inline ? file.mimeType : 'application/octet-stream',
+    'Content-Length': String(file.data.length),
+    'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(filename)}`,
+    'X-Content-Type-Options': 'nosniff',
+    'Cache-Control': 'private, max-age=300',
+  });
+  res.send(file.data);
+});
+
 module.exports = router;

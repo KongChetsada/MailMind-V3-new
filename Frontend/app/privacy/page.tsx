@@ -56,6 +56,7 @@ export default function PrivacyPolicyPage() {
               <p className="mb-2">คุณมีสิทธิโดยชอบธรรมในการจัดการข้อมูลของตนเอง:</p>
               <ul className="list-disc pl-5 space-y-2">
                 <li>คุณสามารถลบข้อมูล API Key และการตั้งค่าส่วนตัวออกจากระบบได้ตลอดเวลา</li>
+                <li>ระบบส่งอีเมลแจ้งเตือนเมื่อพบนัดหมายใหม่ถึงที่อยู่อีเมลของคุณเองผ่านบัญชี Gmail ที่เชื่อมไว้ ไม่ส่งถึงบุคคลอื่น และปิดได้ในหน้าตั้งค่า</li>
                 <li>
                   คุณสามารถยกเลิกการเชื่อมต่อและเพิกถอนสิทธิ์ที่ให้ไว้กับแอปพลิเคชันได้ทันที ผ่านหน้า 
                   <a href="https://myaccount.google.com/permissions" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline mx-1">

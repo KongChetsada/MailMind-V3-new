@@ -79,7 +79,7 @@ export default function StatsPanel() {
       {stats && (
         <>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Tile label="อีเมลที่รับเข้า" value={stats.emails.total} hint={`วิเคราะห์แล้ว ${stats.emails.DONE} · ข้าม ${stats.emails.SKIPPED}`} />
+            <Tile label="อีเมลที่รับเข้า" value={stats.emails.total} hint={`วิเคราะห์แล้ว ${stats.emails.DONE} · ข้าม ${stats.emails.SKIPPED}${stats.emails.MANUAL ? ` · ย้อนหลังยังไม่วิเคราะห์ ${stats.emails.MANUAL}` : ""}`} />
             <Tile label="ตอบกลับผ่านระบบ" value={stats.drafts.sent} hint={`แก้ข้อความก่อนส่ง ${stats.drafts.sentAfterEdit} · ทิ้ง ${stats.drafts.discarded}`} />
             <Tile label="บันทึกลงปฏิทิน" value={stats.actions.created} hint={`รอยืนยัน ${stats.actions.suggested} · แก้กิจกรรมเดิม ${stats.actions.merged} · ไม่ลง ${stats.actions.dismissed}`} />
             <Tile label="เวลาจากรับถึงตอบ (ค่ากลาง)" value={formatDuration(stats.drafts.medianResponseMinutes)} hint="เฉพาะอีเมลที่ตอบผ่านระบบ" />

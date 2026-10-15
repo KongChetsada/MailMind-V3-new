@@ -15,12 +15,16 @@ const receivedAt = (index) => new Date(startedAt - (index + 1) * 37 * 60 * 1000)
 // ตัวอย่างที่มี threadId เดียวกันอยู่ในเธรดเดียวกัน (ฉบับที่อยู่ก่อนในไฟล์คือฉบับที่ใหม่กว่า)
 const threadIdOf = (sample) => `thread-${sample.threadId || sample.id}`;
 
-const state = { sent: [], events: new Map() };
+const state = { sent: [], notifications: [], events: new Map() };
 
 const demoMail = {
   provider: 'GOOGLE',
   async listMessageIdsSince() {
     return { ids: samples.map((s) => s.id), truncated: false };
+  },
+  // อีเมลตัวอย่างทุกฉบับถูกดึงตอนซิงก์แล้ว จึงไม่มีฉบับย้อนหลังให้ดึงเพิ่ม
+  async listMessageIdsBefore() {
+    return { ids: [] };
   },
   async getMessageMeta(id) {
     const index = samples.findIndex((s) => s.id === id);
@@ -61,6 +65,12 @@ const demoMail = {
   async sendReply({ threadId, body }) {
     const id = `demo-sent-${state.sent.length + 1}`;
     state.sent.push({ id, threadId, body, at: new Date().toISOString() });
+    return { id };
+  },
+  // เก็บไว้ในหน่วยความจำ ไม่ส่งจริง
+  async sendNotification({ to, subject, html }) {
+    const id = `demo-notify-${state.notifications.length + 1}`;
+    state.notifications.push({ id, to, subject, html, at: new Date().toISOString() });
     return { id };
   },
   async markRead() {},

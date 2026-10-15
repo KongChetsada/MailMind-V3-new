@@ -10,7 +10,7 @@ export type EmailCategory =
   | "OTHER";
 
 export type Priority = "HIGH" | "NORMAL" | "LOW";
-export type AnalysisStatus = "PENDING" | "PROCESSING" | "DONE" | "FAILED" | "SKIPPED";
+export type AnalysisStatus = "PENDING" | "PROCESSING" | "DONE" | "FAILED" | "SKIPPED" | "MANUAL";
 export type ActionKind = "EVENT" | "DEADLINE";
 export type Availability = "NOT_CHECKED" | "AVAILABLE" | "CONFLICT" | "OUT_OF_WORKING_HOURS" | "OUT_OF_WORK_DAYS";
 export type ActionStatus = "SUGGESTED" | "CREATING" | "CREATED" | "FAILED" | "DISMISSED" | "MERGED";
@@ -102,7 +102,15 @@ export interface ThreadMessage {
   receivedAt: string;
   text: string;
   html: string;
+  attachments: Attachment[];
   isCurrent: boolean;
+}
+
+export interface Attachment {
+  partId: string;
+  filename: string;
+  mimeType: string;
+  size: number;
 }
 
 export interface EmailDetail extends EmailListItem {
@@ -143,6 +151,12 @@ export interface MailAccount {
   status: "ACTIVE" | "NEEDS_REAUTH" | "DISABLED";
   lastSyncAt: string | null;
   lastSyncError: string | null;
+  backfill: {
+    status: "idle" | "running" | "paused" | "done" | "failed";
+    count: number;
+    oldestAt: string | null;
+    error: string | null;
+  };
 }
 
 export interface AiProviderInfo {
@@ -156,6 +170,7 @@ export interface AiProviderInfo {
 
 export interface UserSetting {
   isAutoAnalyzeActive: boolean;
+  notifyNewAppointments: boolean;
   aiProvider: string;
   aiModel: string | null;
   startTime: string;

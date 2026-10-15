@@ -6,6 +6,10 @@ const sameDay = (a: Date, b: Date) =>
 const time = (d: Date) => d.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", hour12: false });
 const longDate = (d: Date) => d.toLocaleDateString("th-TH", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 
+/** วันที่อย่างเดียว เช่น 15 ต.ค. 2569 */
+export const formatDate = (iso: string | null) =>
+  iso ? new Date(iso).toLocaleDateString("th-TH", { day: "numeric", month: "short", year: "numeric" }) : "";
+
 /** เวลาในรายการอีเมล: วันนี้แสดงเวลา วันอื่นแสดงวันที่ */
 export const formatListTime = (iso: string) => {
   const d = new Date(iso);
