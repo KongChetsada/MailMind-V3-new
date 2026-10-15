@@ -17,7 +17,7 @@ import type {
   UserSetting,
 } from "./types";
 
-export const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
+export const API_BASE = (process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000").replace(/\/+$/, "");
 const TOKEN_KEY = "app_token";
 
 export const tokenStore = {

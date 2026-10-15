@@ -16,7 +16,7 @@ const settingsRouter = require('./modules/settings/settings.routes');
 
 const createApp = () => {
   const app = express();
-  const allowedOrigins = [...new Set([env.frontendUrl, 'http://localhost:3000'])];
+  const allowedOrigins = [...new Set([env.frontendUrl, ...(env.isProduction ? [] : ['http://localhost:3000'])])];
 
   app.use(
     cors({

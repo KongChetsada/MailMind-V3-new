@@ -21,7 +21,9 @@
 
 ## เริ่มใช้งาน
 
-ต้องมี Node.js 20+, pnpm, PostgreSQL และ Ollama (ถ้าใช้ AI ในเครื่อง)
+สำหรับ production บน Vercel + Railway ดู [DEPLOYMENT.md](DEPLOYMENT.md)
+
+ต้องมี Node.js 22.x, pnpm 10.33.0, PostgreSQL และ Ollama (ถ้าใช้ AI ในเครื่อง)
 
 ```bash
 # 1) ฐานข้อมูล

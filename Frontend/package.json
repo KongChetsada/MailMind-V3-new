@@ -2,11 +2,15 @@
   "name": "mailmind",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "engines": { "node": "22.x" },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node --test test/*.test.mjs",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
