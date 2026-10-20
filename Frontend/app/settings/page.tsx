@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Settings as SettingsIcon } from "lucide-react";
+import { Settings as SettingsIcon, UserRound } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
 import AiSettings from "@/components/settings/AiSettings";
+import AutomationSettings from "@/components/settings/AutomationSettings";
 import ProfileSettings from "@/components/settings/ProfileSettings";
+import SettingsSection from "@/components/settings/SettingsSection";
 import { Notice, Spinner } from "@/components/common/Feedback";
 import { api, errorMessage } from "@/lib/api";
 import type { SettingsResponse } from "@/lib/types";
@@ -30,15 +32,14 @@ function Loader() {
   }
 
   return (
-    <div className="grid gap-5 xl:grid-cols-2">
-      <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-xs">
-        <h2 className="mb-4 text-sm font-black text-slate-900">ข้อมูลผู้ใช้และเวลาทำงาน</h2>
+    <div className="grid items-start gap-5 xl:grid-cols-2">
+      <SettingsSection icon={UserRound} title="ข้อมูลผู้ใช้และเวลาทำงาน" description="ใช้ในร่างตอบกลับ และใช้ตรวจว่านัดหมายอยู่ในเวลาทำงานหรือไม่">
         <ProfileSettings data={data} onSaved={setData} />
-      </section>
-      <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-xs">
-        <h2 className="mb-4 text-sm font-black text-slate-900">โมเดล AI</h2>
+      </SettingsSection>
+      <div className="space-y-5">
+        <AutomationSettings data={data} onSaved={setData} />
         <AiSettings data={data} onSaved={setData} />
-      </section>
+      </div>
     </div>
   );
 }
