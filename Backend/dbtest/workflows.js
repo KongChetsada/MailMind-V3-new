@@ -1032,3 +1032,90 @@ test('attachments: listed in the detail, served to the owner only, and unsafe ty
   assert.equal((await raw(`${base}/9`)).status, 404);
   assert.equal((await raw(`${base}/abc`)).status, 400);
 });
+
+// ───────── template ตอบกลับ (RAG) ─────────
+const { tokenize } = require('../src/core/templates/retrieval');
+const { DEFAULT_TEMPLATES } = require('../src/core/templates/defaults');
+
+// embedding จำลอง: ถุงคำที่ hash ลง 64 มิติ (คำเหมือนกัน → เวกเตอร์ใกล้กัน)
+const fakeEmbedding = { model: 'fake-embed', down: false, calls: 0 };
+const hashVector = (text) => {
+  const v = new Array(64).fill(0);
+  for (const w of tokenize(text)) {
+    let h = 0;
+    for (const ch of w) h = (h * 31 + ch.codePointAt(0)) % 64;
+    v[h] += 1;
+  }
+  return v;
+};
+overrideDeps({
+  embeddingModel: () => fakeEmbedding.model,
+  embed: async (texts) => {
+    fakeEmbedding.calls += 1;
+    return fakeEmbedding.down ? null : texts.map(hashVector);
+  },
+});
+
+test('templates: the sample set is created once, drafts use the closest template, and the choice is recorded', async () => {
+  const first = await api('/api/templates');
+  assert.equal(first.status, 200);
+  assert.equal(first.json.items.length, DEFAULT_TEMPLATES.length);
+  assert.equal((await api('/api/templates')).json.items.length, DEFAULT_TEMPLATES.length); // ไม่สร้างซ้ำ
+
+  addMessage(`${RUN}-tpl`, { subject: 'ขอเลื่อนนัดประชุมโครงการ', text: 'ขอนัดประชุมโครงการ วันจันทร์หน้า เวลา 10:00 - 11:30 น. ห้อง 301 ขอเลื่อนจากเดิม' });
+  await syncAccount(account.id);
+  const row = await emailRow(`${RUN}-tpl`);
+  await analyzeEmail(row.id);
+
+  const callsBefore = fake.aiCalls.length;
+  const draft = await generateDraft(row.id, { intent: 'ACCEPT' });
+  const prompt = fake.aiCalls.slice(callsBefore).find((p) => p.includes('"draftMessage"'));
+  const chosen = await prisma.replyTemplate.findUnique({ where: { id: draft.templateId } });
+  assert.ok(chosen, 'draft records the template it was based on');
+  assert.deepEqual([chosen.category, chosen.intent], ['APPOINTMENT', 'ACCEPT']);
+  assert.match(prompt, /REFERENCE TEMPLATE/);
+  assert.ok(prompt.includes(chosen.body.split('\n')[2].slice(0, 20)), 'template body is in the prompt');
+  assert.equal(chosen.embeddingModel, 'fake-embed'); // คำนวณ embedding ให้ตอนค้นหา
+
+  const detail = await api(`/api/emails/${row.id}`);
+  assert.deepEqual(detail.json.draft.template, { id: chosen.id, name: chosen.name });
+
+  const preview = await api('/api/templates/preview', { method: 'POST', body: { emailId: row.id, intent: 'ACCEPT' } });
+  assert.deepEqual([preview.json.intent, preview.json.match.template.id, preview.json.match.method], ['ACCEPT', chosen.id, 'embedding']);
+});
+
+test('templates: falls back to keywords without embeddings, edits reset the vector, and no match means a plain draft', async () => {
+  const row = await emailRow(`${RUN}-tpl`);
+
+  fakeEmbedding.down = true;
+  const keyword = await api('/api/templates/preview', { method: 'POST', body: { emailId: row.id, intent: 'DECLINE' } });
+  assert.equal(keyword.json.match.method, 'keyword');
+  assert.equal(keyword.json.match.template.intent, 'DECLINE');
+  fakeEmbedding.down = false;
+
+  // แก้เนื้อหา → embedding เดิมถูกล้าง
+  const list = (await api('/api/templates')).json.items;
+  const accept = list.filter((t) => t.category === 'APPOINTMENT' && t.intent === 'ACCEPT');
+  const edited = await api(`/api/templates/${accept[0].id}`, { method: 'PUT', body: { body: 'เรียน [ชื่อผู้ส่ง]\n\nยินดีครับ พบกัน [วันเวลา]' } });
+  assert.deepEqual([edited.status, edited.json.template.hasEmbedding], [200, false]);
+  // แก้แค่เนื้อหา ประเภทและเจตนาต้องคงเดิม
+  assert.deepEqual([edited.json.template.category, edited.json.template.intent, edited.json.template.name], ['APPOINTMENT', 'ACCEPT', accept[0].name]);
+
+  // ปิดทุก template ของกรณีนี้ → ร่างแบบเดิม
+  for (const t of accept) await api(`/api/templates/${t.id}`, { method: 'PUT', body: { isActive: false } });
+  const callsBefore = fake.aiCalls.length;
+  const plain = await generateDraft(row.id, { intent: 'ACCEPT' });
+  assert.equal(plain.templateId, null);
+  assert.doesNotMatch(fake.aiCalls.slice(callsBefore).find((p) => p.includes('"draftMessage"')), /REFERENCE TEMPLATE/);
+
+  // ของคนอื่นแก้/ลบไม่ได้
+  const otherToken = signUserToken(otherUser);
+  assert.equal((await api(`/api/templates/${accept[0].id}`, { method: 'PUT', token: otherToken, body: { isActive: true } })).status, 404);
+  assert.equal((await api(`/api/templates/${accept[0].id}`, { method: 'DELETE', token: otherToken })).status, 404);
+  assert.equal((await api('/api/templates', { method: 'POST', body: { name: '', body: 'x' } })).status, 400);
+
+  // ลบหมดแล้วไม่สร้างชุดตัวอย่างคืน
+  for (const t of (await api('/api/templates')).json.items) await api(`/api/templates/${t.id}`, { method: 'DELETE' });
+  assert.equal((await api('/api/templates')).json.items.length, 0);
+  assert.equal((await generateDraft(row.id, { intent: 'ACCEPT' })).templateId, null);
+});

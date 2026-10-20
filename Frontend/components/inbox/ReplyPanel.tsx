@@ -129,6 +129,11 @@ export default function ReplyPanel({ emailId, recipient, draft, needsReply, onCh
               {draft.source === "AI" ? `AI ร่าง: ${INTENT_LABEL[draft.intent]}` : "เขียนเอง"}
             </span>
           )}
+          {active && draft.source === "AI" && draft.template && (
+            <span className="ml-1.5 rounded-md bg-white px-1.5 py-0.5 text-[10px] font-semibold text-violet-700 ring-1 ring-violet-200" title="AI ใช้ template นี้เป็นฐานในการร่าง">
+              อิง template: {draft.template.name}
+            </span>
+          )}
         </p>
         {active && generator}
       </div>

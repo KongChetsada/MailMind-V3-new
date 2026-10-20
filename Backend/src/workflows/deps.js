@@ -9,7 +9,10 @@ const createDefaultDeps = () => {
   const { getMailConnector } = require('../connectors/mail');
   const { getCalendarConnector } = require('../connectors/calendar');
   const { getAiClientForUser } = require('../connectors/ai');
+  const { embed, embeddingModel } = require('../connectors/ai/embeddings');
   return {
+    embed,
+    embeddingModel,
     prisma,
     getMail: (account) => getMailConnector(account),
     getCalendar: (account) => getCalendarConnector(account),

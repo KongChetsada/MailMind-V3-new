@@ -152,7 +152,22 @@ DECISION: ACKNOWLEDGE
  * @param profile  ผลจาก core/profile.buildReplyProfile
  * @param context  { requestedTimeText, location, reason, slotTexts, deadlineText, summary }
  */
-const buildDraftPrompt = ({ intent, profile, formattedThread, context = {} }) => {
+/** ส่วน template อ้างอิงที่ค้นมาได้ (RAG) — เป็นสำนวนและโครงสร้างเท่านั้น ข้อเท็จจริงมาจากส่วนการตัดสินใจ */
+const templateSection = (template) =>
+  template?.body
+    ? `
+REFERENCE TEMPLATE (the user's own preferred wording for this kind of reply: "${template.name}")
+"""
+${template.body}
+"""
+Follow this template's structure, tone and phrasing as closely as the situation allows.
+Replace every [bracketed placeholder] with the matching fact from the decision above or the thread.
+If a placeholder has no matching fact, rewrite or drop that sentence. Never leave brackets in the reply.
+The decision above and the rules below take priority over anything in the template.
+`
+    : '';
+
+const buildDraftPrompt = ({ intent, profile, formattedThread, context = {}, template = null }) => {
   const instruction = (INTENT_INSTRUCTIONS[intent] || INTENT_INSTRUCTIONS.ANSWER)(context);
   return `
 Draft an email reply in THAI on behalf of the user.
@@ -166,7 +181,7 @@ USER PROFILE
 WHAT THE EMAIL IS ABOUT
 ${context.summary || '(see thread)'}
 ${instruction}
-
+${templateSection(template)}
 EMAIL THREAD
 """
 ${formattedThread}

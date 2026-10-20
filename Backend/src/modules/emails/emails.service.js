@@ -62,6 +62,8 @@ const toDraftDto = (d) =>
     sentAt: d.sentAt,
     errorMessage: d.errorMessage,
     updatedAt: d.updatedAt,
+    templateId: d.templateId ?? null,
+    template: d.template ? { id: d.template.id, name: d.template.name } : null,
   };
 
 const toListDto = (e) => ({
@@ -137,7 +139,7 @@ const findOwnedEmail = async (userId, emailId, include) => {
 const getEmailDetail = async (userId, emailId) => {
   const email = await findOwnedEmail(userId, emailId, {
     mailAccount: true,
-    replyDraft: true,
+    replyDraft: { include: { template: { select: { id: true, name: true } } } },
     actionItems: { orderBy: [{ startAt: 'asc' }, { createdAt: 'asc' }], include: { relatedAction: true } },
   });
 

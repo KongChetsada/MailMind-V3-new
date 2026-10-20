@@ -104,7 +104,7 @@ const saveManualDraft = async (userId, emailId, body, deps = getDeps()) => {
   if (email.replyDraft && ['SENDING', 'SENT'].includes(email.replyDraft.status)) {
     throw conflict('DRAFT_LOCKED', 'อีเมลนี้ตอบกลับไปแล้วหรือกำลังส่งอยู่');
   }
-  const data = { body: body.trim(), source: 'USER', status: 'PENDING', errorMessage: null };
+  const data = { body: body.trim(), source: 'USER', status: 'PENDING', errorMessage: null, templateId: null };
   return prisma.replyDraft.upsert({
     where: { emailId },
     update: data,

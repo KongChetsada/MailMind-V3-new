@@ -20,6 +20,8 @@ const env = {
   localAi: {
     baseUrl: process.env.LOCAL_AI_BASE_URL || 'http://localhost:11434/v1',
     model: process.env.LOCAL_AI_MODEL || 'llama3.1:8b',
+    // โมเดล embedding บน Ollama สำหรับค้นหา template ตอบกลับ (ตั้งเป็นค่าว่าง = ปิด ค้นด้วยคำแทน)
+    embeddingModel: process.env.EMBEDDING_MODEL ?? 'bge-m3',
   },
   // โหมดสาธิต: ใช้อีเมลตัวอย่างแทน Gmail ไม่ต้องมี Google credentials (ห้ามเปิดในระบบที่ใช้งานจริง)
   demoMode: String(process.env.DEMO_MODE || 'false').toLowerCase() === 'true',

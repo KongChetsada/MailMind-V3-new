@@ -10,6 +10,7 @@ const { getCategoryPolicy, effectiveCategory, REPLY_INTENTS } = require('../core
 const { normalizeTimeZone, formatThaiRange, formatThaiDate } = require('../core/time');
 const { findAvailableSlots } = require('../core/scheduler');
 const { lastOccurrenceStart } = require('../core/occurrences');
+const { findTemplate } = require('./replyTemplates');
 
 const LOCKED_DRAFT_STATUSES = ['SENDING', 'SENT'];
 
@@ -97,10 +98,21 @@ const generateDraft = async (emailId, options = {}, deps = getDeps()) => {
     formattedThread = formatThreadForAi(thread).formattedThread || `Subject: ${email.subject || ''}\n${email.snippet || ''}`;
   }
 
+  // RAG: template ของผู้ใช้ที่เข้ากับกรณีนี้ที่สุด — ค้นไม่สำเร็จก็ร่างแบบเดิมต่อได้
+  let match = null;
+  try {
+    match = await findTemplate(
+      { userId: account.userId, category, intent, queryText: [email.subject, email.summary].filter(Boolean).join('\n') },
+      deps
+    );
+  } catch (error) {
+    logger.warn('TEMPLATE_LOOKUP_FAILED', 'Reply template lookup failed', { error: error.message });
+  }
+
   const ai = await getAi(account.userId);
   const response = await ai.complete({
     system: JSON_SYSTEM_PROMPT,
-    user: buildDraftPrompt({ intent, profile: buildReplyProfile(settings), formattedThread, context }),
+    user: buildDraftPrompt({ intent, profile: buildReplyProfile(settings), formattedThread, context, template: match?.template }),
     temperature: 0.3,
     json: true,
   });
@@ -110,16 +122,18 @@ const generateDraft = async (emailId, options = {}, deps = getDeps()) => {
     throw new HttpError(502, 'AI_EMPTY_DRAFT', 'AI ไม่ได้สร้างข้อความร่าง กรุณาลองใหม่');
   }
 
-  const data = { intent, body: draft, source: 'AI', status: 'PENDING', errorMessage: null };
+  const data = { intent, body: draft, source: 'AI', status: 'PENDING', errorMessage: null, templateId: match?.template.id || null };
   const saved = await prisma.replyDraft.upsert({
     where: { emailId },
     update: data,
     create: { emailId, ...data },
+    include: { template: { select: { id: true, name: true } } },
   });
   logger.info('DRAFT_SAVED', 'Reply draft saved', {
     intent,
     parserStrategy: strategy,
     draftLength: draft.length,
+    template: match ? { id: match.template.id, method: match.method, score: match.score } : null,
     provider: ai.provider,
     model: ai.model,
   });

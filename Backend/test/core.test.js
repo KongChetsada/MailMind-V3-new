@@ -601,3 +601,67 @@ test('inline images: cid references become data URIs, others stay untouched', ()
   assert.ok(out.includes('src="cid:missing"')); // ไม่มีข้อมูล → คงเดิม (หน้าเว็บตัด src ทิ้งเอง)
   assert.ok(out.includes('src="cid:logo@xyz"')); // cid ที่ขึ้นต้นเหมือนกันไม่ถูกแทนผิดตัว
 });
+
+// ───── reply templates (RAG) ─────
+const retrieval = require('../src/core/templates/retrieval');
+const { DEFAULT_TEMPLATES } = require('../src/core/templates/defaults');
+
+test('templates: candidates are filtered by category and intent, null means any', () => {
+  const t = (id, category, intent, extra = {}) => ({ id, name: id, category, intent, body: 'x', isActive: true, ...extra });
+  const list = [t('exact', 'APPOINTMENT', 'ACCEPT'), t('anyIntent', 'APPOINTMENT', null), t('any', null, null), t('other', 'FYI', 'ACKNOWLEDGE'), t('off', 'APPOINTMENT', 'ACCEPT', { isActive: false })];
+  const ids = retrieval.filterCandidates(list, { category: 'APPOINTMENT', intent: 'ACCEPT' }).map((c) => c.template.id);
+  assert.deepEqual(ids, ['exact', 'anyIntent', 'any']);
+});
+
+test('templates: Thai text is segmented into words and stop words are dropped', () => {
+  const words = retrieval.tokenize('ขอเลื่อนนัดประชุมเป็นวันพุธ [วันเวลา] ครับ');
+  assert.ok(words.includes('เลื่อน') && words.includes('ประชุม'), words.join('|'));
+  assert.ok(!words.includes('ครับ') && !words.some((w) => w.includes('วันเวลา')));
+});
+
+test('templates: embedding ranking picks the closest template and refuses unrelated generic ones', () => {
+  const base = { category: 'APPOINTMENT', intent: 'ACCEPT', isActive: true, body: 'x' };
+  const templates = [
+    { ...base, id: 'meeting', name: 'ตอบรับนัดประชุม', embedding: [1, 0, 0] },
+    { ...base, id: 'resched', name: 'ยืนยันการเลื่อนนัด', embedding: [0, 1, 0] },
+  ];
+  const pick = retrieval.rankTemplates({ templates, category: 'APPOINTMENT', intent: 'ACCEPT', queryText: '', queryVector: [0.2, 0.9, 0] });
+  assert.deepEqual([pick.template.id, pick.method], ['resched', 'embedding']);
+  assert.equal(retrieval.cosine([1, 0], [1, 0]), 1);
+
+  // template ที่ใช้ได้ทุกกรณีแต่ความหมายไม่ใกล้ → ไม่ใช้
+  const generic = [{ id: 'g', name: 'ทั่วไป', category: null, intent: null, isActive: true, body: 'x', embedding: [0, 0, 1] }];
+  assert.equal(retrieval.rankTemplates({ templates: generic, category: 'FYI', intent: 'ACKNOWLEDGE', queryText: '', queryVector: [1, 0, 0] }), null);
+});
+
+test('templates: without embeddings the Thai keyword overlap decides', () => {
+  const pick = retrieval.rankTemplates({
+    templates: DEFAULT_TEMPLATES.map((t, i) => ({ ...t, id: `d${i}`, isActive: true })),
+    category: 'APPOINTMENT',
+    intent: 'ACCEPT',
+    queryText: 'Re: นัดประชุมงบประมาณ\nขอเลื่อนนัดเป็นวันพุธ',
+    queryVector: null,
+  });
+  assert.equal(pick.method, 'keyword');
+  assert.equal(pick.template.name, 'ยืนยันการเลื่อนนัด');
+  // ไม่มี template ของกรณีนี้เลย
+  assert.equal(retrieval.rankTemplates({ templates: [], category: 'OTHER', intent: 'ANSWER', queryText: 'x' }), null);
+});
+
+test('templates: the draft prompt carries the reference template only when one was found', () => {
+  const profile = buildReplyProfile({ gender: 'MALE', tone: 'formal', signature: 'ขอแสดงความนับถือ' });
+  const withTemplate = buildDraftPrompt({ intent: 'ACCEPT', profile, formattedThread: 'x', template: { name: 'ตอบรับนัด', body: 'เรียน [ชื่อผู้ส่ง] ยินดีเข้าร่วม' } });
+  assert.match(withTemplate, /REFERENCE TEMPLATE/);
+  assert.match(withTemplate, /ยินดีเข้าร่วม/);
+  assert.match(withTemplate, /Never leave brackets/);
+  assert.doesNotMatch(buildDraftPrompt({ intent: 'ACCEPT', profile, formattedThread: 'x' }), /REFERENCE TEMPLATE/);
+});
+
+test('templates: every default template is valid for the schema', () => {
+  assert.ok(DEFAULT_TEMPLATES.length >= 8);
+  for (const t of DEFAULT_TEMPLATES) {
+    assert.ok(CATEGORY_CODES.includes(t.category), t.name);
+    assert.ok(['ACCEPT', 'PROPOSE_TIME', 'DECLINE', 'ANSWER', 'ACKNOWLEDGE'].includes(t.intent), t.name);
+    assert.ok(t.body.length > 20 && t.name.length <= 80);
+  }
+});

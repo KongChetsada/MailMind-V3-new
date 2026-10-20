@@ -13,6 +13,7 @@ const actionsRouter = require('./modules/actions/actions.routes');
 const calendarRouter = require('./modules/calendar/calendar.routes');
 const summaryRouter = require('./modules/summary/summary.routes');
 const settingsRouter = require('./modules/settings/settings.routes');
+const templatesRouter = require('./modules/templates/templates.routes');
 
 const createApp = () => {
   const app = express();
@@ -42,6 +43,7 @@ const createApp = () => {
   app.use('/api/calendar', requireAuth, calendarRouter);
   app.use('/api/summary', requireAuth, summaryRouter);
   app.use('/api/settings', requireAuth, settingsRouter);
+  app.use('/api/templates', requireAuth, templatesRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

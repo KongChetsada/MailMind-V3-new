@@ -7,6 +7,7 @@ import AiSettings from "@/components/settings/AiSettings";
 import AutomationSettings from "@/components/settings/AutomationSettings";
 import ProfileSettings from "@/components/settings/ProfileSettings";
 import SettingsSection from "@/components/settings/SettingsSection";
+import TemplateSettings from "@/components/settings/TemplateSettings";
 import { Notice, Spinner } from "@/components/common/Feedback";
 import { api, errorMessage } from "@/lib/api";
 import type { SettingsResponse } from "@/lib/types";
@@ -40,13 +41,16 @@ function Loader() {
         <AutomationSettings data={data} onSaved={setData} />
         <AiSettings data={data} onSaved={setData} />
       </div>
+      <div className="xl:col-span-2">
+        <TemplateSettings />
+      </div>
     </div>
   );
 }
 
 export default function SettingsPage() {
   return (
-    <AppShell title="ตั้งค่า" description="ข้อมูลสำหรับร่างตอบกลับ เวลาทำงาน และโมเดล AI" icon={SettingsIcon} bare>
+    <AppShell title="ตั้งค่า" description="ข้อมูลสำหรับร่างตอบกลับ เวลาทำงาน โมเดล AI และ template ตอบกลับ" icon={SettingsIcon} bare>
       <Loader />
     </AppShell>
   );

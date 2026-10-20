@@ -93,6 +93,28 @@ export interface ReplyDraft {
   sentAt: string | null;
   errorMessage: string | null;
   updatedAt: string;
+  templateId?: string | null;
+  template?: { id: string; name: string } | null;
+}
+
+export interface ReplyTemplate {
+  id: string;
+  name: string;
+  category: EmailCategory | null;
+  intent: ReplyIntent | null;
+  whenToUse: string | null;
+  body: string;
+  isActive: boolean;
+  hasEmbedding: boolean;
+  updatedAt: string;
+}
+
+export type ReplyTemplateInput = Pick<ReplyTemplate, "name" | "category" | "intent" | "whenToUse" | "body"> & { isActive?: boolean };
+
+export interface TemplatePreview {
+  category: EmailCategory;
+  intent: ReplyIntent;
+  match: { template: ReplyTemplate; score: number; similarity: number; method: "embedding" | "keyword"; candidates: number } | null;
 }
 
 export interface ThreadMessage {

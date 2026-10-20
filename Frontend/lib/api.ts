@@ -11,6 +11,9 @@ import type {
   MailAccount,
   ReplyDraft,
   ReplyIntent,
+  ReplyTemplate,
+  ReplyTemplateInput,
+  TemplatePreview,
   SettingsResponse,
   Stats,
   SummaryType,
@@ -146,6 +149,14 @@ export const api = {
     get: (type: SummaryType, force = false) =>
       request<{ content: string; generatedAt: string; cached: boolean }>("/api/summary", { query: { type, force: String(force) } }),
     stats: (days: number) => request<Stats>("/api/summary/stats", { query: { days } }),
+  },
+
+  templates: {
+    list: () => request<{ items: ReplyTemplate[] }>("/api/templates"),
+    create: (body: ReplyTemplateInput) => request<{ template: ReplyTemplate }>("/api/templates", { method: "POST", body }),
+    update: (id: string, body: Partial<ReplyTemplateInput>) => request<{ template: ReplyTemplate }>(`/api/templates/${id}`, { method: "PUT", body }),
+    remove: (id: string) => request<{ ok: true }>(`/api/templates/${id}`, { method: "DELETE" }),
+    preview: (emailId: string, intent?: ReplyIntent) => request<TemplatePreview>("/api/templates/preview", { method: "POST", body: { emailId, intent } }),
   },
 
   settings: {

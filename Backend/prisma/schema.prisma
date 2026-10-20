@@ -111,10 +111,11 @@ model User {
   name    String?
   picture String?
 
-  setting       UserSetting?
-  mailAccounts  MailAccount[]
-  aiCredentials AiCredential[]
-  summaries     Summary[]
+  setting        UserSetting?
+  mailAccounts   MailAccount[]
+  aiCredentials  AiCredential[]
+  summaries      Summary[]
+  replyTemplates ReplyTemplate[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -126,11 +127,13 @@ model UserSetting {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // AI
-  isAutoAnalyzeActive Boolean @default(true)
+  isAutoAnalyzeActive   Boolean   @default(true)
   // ส่งอีเมลแจ้งเตือนถึงตัวผู้ใช้เมื่อพบนัดหมายใหม่รอยืนยัน
-  notifyNewAppointments Boolean @default(true)
-  aiProvider          String  @default("ollama") // ollama | openai | openrouter | gemini | ...
-  aiModel             String?
+  notifyNewAppointments Boolean   @default(true)
+  // สร้างชุด template ตอบกลับตัวอย่างแล้ว (ทำครั้งเดียว ผู้ใช้ลบหมดก็ไม่สร้างคืน)
+  templatesSeededAt     DateTime?
+  aiProvider            String    @default("ollama") // ollama | openai | openrouter | gemini | ...
+  aiModel               String?
   // ไม่มีการสลับผู้ให้บริการอัตโนมัติ: ถ้า provider ที่เลือกล้มเหลว เมลจะเป็น FAILED
 
   // เวลาทำงาน
@@ -311,6 +314,10 @@ model ReplyDraft {
   body   String      @db.Text
   source DraftSource @default(AI)
 
+  // template ที่ AI ใช้เป็นฐานตอนร่าง (ไม่มี = ร่างจากคำสั่งกลาง)
+  templateId String?
+  template   ReplyTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
   status            DraftStatus @default(PENDING)
   sentAt            DateTime?
   providerMessageId String? // id ของข้อความที่ส่งออก
@@ -337,4 +344,29 @@ model Summary {
   createdAt DateTime @default(now())
 
   @@unique([userId, type, periodStart, periodEnd])
+}
+
+// template ตอบกลับของผู้ใช้ แยกตามกรณี — AI ค้นหาอันที่ใกล้ที่สุดมาเป็นฐานตอนร่าง (RAG)
+model ReplyTemplate {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name      String
+  category  EmailCategory? // null = ใช้ได้ทุกประเภท
+  intent    ReplyIntent? // null = ใช้ได้ทุกเจตนา
+  whenToUse String?        @db.Text // คำอธิบายกรณีที่ใช้ (ใช้ในการค้นหาด้วย)
+  body      String         @db.Text
+  isActive  Boolean        @default(true)
+
+  // เวกเตอร์ความหมายของ ชื่อ + กรณี + เนื้อหา (ว่าง = ยังไม่ได้คำนวณ ค้นด้วยคำแทน)
+  embedding      Float[]
+  embeddingModel String?
+
+  drafts ReplyDraft[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
 }
