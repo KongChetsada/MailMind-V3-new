@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, RefreshCw, Sparkles, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowLeft, RefreshCw, Sparkles, ChevronDown, ChevronRight, Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Notice, Spinner, EmptyState } from "@/components/common/Feedback";
 import ActionItemCard from "./ActionItemCard";
 import ReplyPanel from "./ReplyPanel";
 import MessageBody from "./MessageBody";
+import Attachments from "./Attachments";
 import { api, errorMessage } from "@/lib/api";
 import { CATEGORY_META, CATEGORY_ORDER, PRIORITY_LABEL } from "@/lib/labels";
 import { formatDateTime } from "@/lib/format";
@@ -162,6 +163,8 @@ export default function EmailDetail({ emailId, onBack, onChanged }: Props) {
           </Notice>
         ) : waiting ? (
           <Notice>อีเมลนี้ยังรอวิเคราะห์ กด “วิเคราะห์ตอนนี้” เพื่อเริ่มทันที</Notice>
+        ) : email.analysisStatus === "MANUAL" ? (
+          <Notice>อีเมลย้อนหลังที่ยังไม่ได้วิเคราะห์ กด “วิเคราะห์ตอนนี้” ถ้าต้องการให้ AI สรุปและหารายการลงปฏิทิน</Notice>
         ) : email.analysisStatus === "SKIPPED" ? (
           <Notice>ระบบข้ามการวิเคราะห์อีเมลนี้ เพราะผู้ให้บริการอีเมลจัดเป็นโปรโมชันหรือโซเชียล</Notice>
         ) : (
@@ -222,11 +225,13 @@ export default function EmailDetail({ emailId, onBack, onChanged }: Props) {
                     <button onClick={() => setExpanded({ ...expanded, [m.id]: !open })} className="flex w-full items-center gap-2 px-4 py-2.5 text-left">
                       {open ? <ChevronDown className="h-3.5 w-3.5 text-slate-400" /> : <ChevronRight className="h-3.5 w-3.5 text-slate-400" />}
                       <span className="truncate text-xs font-semibold text-slate-700">{m.from}</span>
+                      {(m.attachments?.length ?? 0) > 0 && <Paperclip className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-label="มีไฟล์แนบ" />}
                       <span className="ml-auto shrink-0 text-[11px] text-slate-400">{formatDateTime(m.receivedAt)}</span>
                     </button>
                     {open && (
                       <div className="border-t border-slate-100 px-4 py-3">
                         <MessageBody html={m.html} text={m.text} />
+                        <Attachments emailId={email.id} messageId={m.id} files={m.attachments ?? []} />
                       </div>
                     )}
                   </div>

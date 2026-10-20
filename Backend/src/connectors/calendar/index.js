@@ -1,9 +1,11 @@
 // เลือกตัวเชื่อมปฏิทินตามผู้ให้บริการของบัญชี
 //
 // สัญญาของตัวเชื่อมปฏิทิน:
-//   listEvents({ timeMin, timeMax }) -> [{ id, title, start, end, isAllDay, location, htmlLink }]
+//   listEvents({ timeMin, timeMax }) -> [{ id, title, start, end, isAllDay, location, htmlLink, recurringEventId }]
+//     (กิจกรรมที่เกิดซ้ำต้องถูกแตกเป็นรายครั้ง)
 //   createEvent({ idempotencyKey, title, start, end, isAllDay, location, description,
-//                 timezone, attendeeEmail }) -> { id, htmlLink, alreadyExisted }
+//                 timezone, attendeeEmail, repeatDays }) -> { id, htmlLink, alreadyExisted }
+//   updateEvent({ eventId, start, end, isAllDay, location, timezone, repeatDays }) -> { id, htmlLink }
 const { createGoogleCalendarConnector } = require('./google');
 const { env } = require('../../config/env');
 const { isDemoAccount, demoCalendar } = require('../demo');

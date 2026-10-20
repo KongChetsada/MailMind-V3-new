@@ -99,4 +99,26 @@ const parseAddress = (raw) => {
   return { name: null, address: value || null };
 };
 
-module.exports = { htmlToText, stripQuotedText, messagePlainText, formatThreadForAi, parseAddress };
+/** base64url (แบบที่ Gmail ส่ง) เป็น base64 มาตรฐานสำหรับ data URI */
+const toStandardBase64 = (data) => {
+  const s = String(data || '').replace(/-/g, '+').replace(/_/g, '/').replace(/=+$/, '');
+  return s + '='.repeat((4 - (s.length % 4)) % 4);
+};
+
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * แทนรูปที่แนบในเมล (src="cid:...") ด้วย data URI
+ * images: [{ cid, mimeType, data }] — data เป็น base64 หรือ base64url
+ */
+const replaceCidImages = (html, images) => {
+  let out = String(html || '');
+  for (const image of images || []) {
+    if (!image?.cid || !image.data) continue;
+    const pattern = new RegExp(`cid:${escapeRegExp(image.cid)}(?=["'\\s>])`, 'gi');
+    out = out.replace(pattern, `data:${image.mimeType};base64,${toStandardBase64(image.data)}`);
+  }
+  return out;
+};
+
+module.exports = { htmlToText, stripQuotedText, messagePlainText, formatThreadForAi, parseAddress, toStandardBase64, replaceCidImages };

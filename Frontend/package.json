@@ -2,8 +2,10 @@
   "name": "mailmind",
   "version": "0.1.0",
   "private": true,
-  "packageManager": "pnpm@10.33.0",
-  "engines": { "node": "22.x" },
+  "packageManager": "pnpm@11.21.0",
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",

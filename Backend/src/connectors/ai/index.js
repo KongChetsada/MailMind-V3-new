@@ -21,8 +21,16 @@ class AiError extends Error {
 const toAiError = (error, provider) => {
   if (error instanceof AiError) return error;
   const msg = String(error?.message || error);
-  const unreachable =
-    error?.code === 'ECONNREFUSED' || /ECONNREFUSED|Connection error|fetch failed|timed out|timeout/i.test(msg);
+  // หมดเวลา ≠ เชื่อมต่อไม่ได้: โมเดลในเครื่องที่รับงานพร้อมกันหลายคำขอจะตอบช้าจนเกินกำหนด
+  if (/timed out|timeout/i.test(msg)) {
+    return new AiError(
+      'AI_UNREACHABLE',
+      provider.isLocal
+        ? 'Ollama ตอบช้าเกินกำหนด (อาจกำลังประมวลผลหลายคำขอพร้อมกัน) กรุณาลองใหม่'
+        : `${provider.label} ตอบช้าเกินกำหนด กรุณาลองใหม่`
+    );
+  }
+  const unreachable = error?.code === 'ECONNREFUSED' || /ECONNREFUSED|Connection error|fetch failed/i.test(msg);
   if (unreachable) {
     return new AiError(
       'AI_UNREACHABLE',

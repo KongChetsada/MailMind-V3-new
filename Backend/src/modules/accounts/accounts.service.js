@@ -1,5 +1,13 @@
 const prisma = require('../../config/prisma');
-const { HttpError } = require('../../utils/httpError');
+const { HttpError, notFound } = require('../../utils/httpError');
+
+/** idle = ยังไม่เคยดึง · running · paused = หยุดไว้ ทำต่อได้ · done · failed */
+const backfillStatus = (a) => {
+  if (a.backfillDoneAt) return 'done';
+  if (a.backfillStartedAt) return 'running';
+  if (a.backfillError) return 'failed';
+  return a.backfillCursor ? 'paused' : 'idle';
+};
 
 const toAccountDto = (a) => ({
   id: a.id,
@@ -8,7 +16,20 @@ const toAccountDto = (a) => ({
   status: a.status,
   lastSyncAt: a.lastSyncAt,
   lastSyncError: a.lastSyncError,
+  backfill: {
+    status: backfillStatus(a),
+    count: a.backfillCount,
+    oldestAt: a.backfillCursor,
+    error: a.backfillError,
+  },
 });
+
+/** บัญชีอีเมลของผู้ใช้ตามรหัส (ของคนอื่น = ไม่พบ) */
+const findOwnedAccount = async (userId, accountId) => {
+  const account = await prisma.mailAccount.findFirst({ where: { id: accountId, userId } });
+  if (!account) throw notFound('ไม่พบบัญชีอีเมลนี้');
+  return account;
+};
 
 const listAccounts = async (userId) => {
   const accounts = await prisma.mailAccount.findMany({ where: { userId }, orderBy: { createdAt: 'asc' } });
@@ -26,4 +47,4 @@ const requireActiveAccount = async (userId) => {
   throw new HttpError(400, 'NO_MAIL_ACCOUNT', 'ยังไม่ได้เชื่อมบัญชีอีเมล');
 };
 
-module.exports = { listAccounts, requireActiveAccount, toAccountDto };
+module.exports = { listAccounts, requireActiveAccount, findOwnedAccount, toAccountDto };

@@ -12,13 +12,17 @@ const bool = z.preprocess(toBool, z.boolean()).catch(false);
 
 const actionItemSchema = z.object({
   kind: z.preprocess(upper, z.enum(ACTION_KINDS)),
-  title: z.string().trim().min(1),
+  // โมเดลบางครั้งเว้นชื่อว่างทั้งที่สกัดวันเวลาได้ถูก — รับไว้ แล้วใช้หัวข้ออีเมลแทนใน validate.js
+  title: z.preprocess((v) => (v === null || v === undefined ? '' : v), z.string().trim()).catch(''),
   start: nullableString,
   end: nullableString,
   isAllDay: bool,
   isTimeSpecified: bool,
   location: nullableString,
   evidence: nullableString,
+  // ความสัมพันธ์กับรายการเดิมในเธรด (AI เสนอ — ตัดสินจริงด้วยกฎใน core/threadLinking.js)
+  relatesTo: z.preprocess((v) => (typeof v === 'string' && /^\d+$/.test(v.trim()) ? Number(v) : v), z.number().int().positive().nullable()).catch(null),
+  relation: z.preprocess((v) => emptyToNull(upper(v)), z.enum(['RESCHEDULE', 'DETAIL']).nullable()).catch(null),
 });
 
 const analysisSchema = z.object({

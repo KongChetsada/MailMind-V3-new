@@ -10,10 +10,12 @@ export type EmailCategory =
   | "OTHER";
 
 export type Priority = "HIGH" | "NORMAL" | "LOW";
-export type AnalysisStatus = "PENDING" | "PROCESSING" | "DONE" | "FAILED" | "SKIPPED";
+export type AnalysisStatus = "PENDING" | "PROCESSING" | "DONE" | "FAILED" | "SKIPPED" | "MANUAL";
 export type ActionKind = "EVENT" | "DEADLINE";
 export type Availability = "NOT_CHECKED" | "AVAILABLE" | "CONFLICT" | "OUT_OF_WORKING_HOURS" | "OUT_OF_WORK_DAYS";
-export type ActionStatus = "SUGGESTED" | "CREATING" | "CREATED" | "FAILED" | "DISMISSED";
+export type ActionStatus = "SUGGESTED" | "CREATING" | "CREATED" | "FAILED" | "DISMISSED" | "MERGED";
+export type ActionRelation = "DETAIL" | "RESCHEDULE";
+export type ConfirmMode = "CREATE" | "UPDATE_RELATED";
 export type ReplyIntent = "ACCEPT" | "PROPOSE_TIME" | "DECLINE" | "ANSWER" | "ACKNOWLEDGE";
 export type DraftStatus = "PENDING" | "SENDING" | "SENT" | "FAILED" | "DISCARDED";
 export type EmailFilter = "has_draft" | "has_action" | "needs_reply" | "failed" | "unread";
@@ -55,6 +57,8 @@ export interface ActionItem {
   endAt: string | null;
   isAllDay: boolean;
   isTimeSpecified: boolean;
+  /** จำนวนวันติดกันที่กิจกรรมเกิดในช่วงเวลาเดิม (1 = ครั้งเดียว) */
+  repeatDays: number;
   location: string | null;
   evidence: string | null;
   missingFields: string[];
@@ -65,6 +69,19 @@ export interface ActionItem {
   externalLink: string | null;
   errorMessage: string | null;
   emailSubject?: string | null;
+  /** ความสัมพันธ์กับรายการเดิมในเธรดเดียวกัน (null = ไม่เกี่ยวข้อง) */
+  relation: ActionRelation | null;
+  related: {
+    id: string;
+    emailId: string;
+    title: string;
+    startAt: string | null;
+    endAt: string | null;
+    isAllDay: boolean;
+    isTimeSpecified: boolean;
+    repeatDays: number;
+    status: ActionStatus;
+  } | null;
 }
 
 export interface ReplyDraft {
@@ -85,7 +102,15 @@ export interface ThreadMessage {
   receivedAt: string;
   text: string;
   html: string;
+  attachments: Attachment[];
   isCurrent: boolean;
+}
+
+export interface Attachment {
+  partId: string;
+  filename: string;
+  mimeType: string;
+  size: number;
 }
 
 export interface EmailDetail extends EmailListItem {
@@ -126,6 +151,12 @@ export interface MailAccount {
   status: "ACTIVE" | "NEEDS_REAUTH" | "DISABLED";
   lastSyncAt: string | null;
   lastSyncError: string | null;
+  backfill: {
+    status: "idle" | "running" | "paused" | "done" | "failed";
+    count: number;
+    oldestAt: string | null;
+    error: string | null;
+  };
 }
 
 export interface AiProviderInfo {
@@ -139,6 +170,7 @@ export interface AiProviderInfo {
 
 export interface UserSetting {
   isAutoAnalyzeActive: boolean;
+  notifyNewAppointments: boolean;
   aiProvider: string;
   aiModel: string | null;
   startTime: string;
@@ -172,6 +204,6 @@ export interface Stats {
     sentAfterEdit: number;
     medianResponseMinutes: number | null;
   };
-  actions: { suggested: number; created: number; dismissed: number; failed: number };
+  actions: { suggested: number; created: number; dismissed: number; merged: number; failed: number };
   models: { provider: string; model: string | null; analyzed: number }[];
 }

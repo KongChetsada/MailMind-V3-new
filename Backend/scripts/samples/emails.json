@@ -1,5 +1,21 @@
 [
   {
+    "id": "trip-2-meeting-point",
+    "threadId": "trip",
+    "expected": "APPOINTMENT",
+    "from": "การ์ตูน <cartoon@example.com>",
+    "subject": "Re: ไปเที่ยวภูสอยดาววันเสาร์",
+    "text": "ได้เลยค่ะ งั้นรอที่หอนะ ตอน 02.00 เดี๋ยวไปรับ"
+  },
+  {
+    "id": "meeting-2-reschedule",
+    "threadId": "budget-meeting",
+    "expected": "APPOINTMENT",
+    "from": "อรทัย <orathai@example.com>",
+    "subject": "Re: นัดประชุมทบทวนงบประมาณ",
+    "text": "ขอโทษด้วยค่ะ วันอังคารดิฉันติดประชุมด่วน ขอเลื่อนเป็นวันพุธที่ 28 ตุลาคม 2569 เวลา 13:00 - 14:00 น. ห้องเดิมได้ไหมคะ"
+  },
+  {
     "id": "appt-1",
     "expected": "APPOINTMENT",
     "from": "วิชัย ทองดี <wichai@example.com>",
@@ -40,7 +56,7 @@
     "from": "Thai Airways <no-reply@example-airline.com>",
     "subject": "ยืนยันการจองเที่ยวบิน TG102",
     "text": "",
-    "html": "<html><body><h2>ยืนยันการจอง</h2><p>รหัสการจอง: ABC123</p><table><tr><td>เที่ยวบิน</td><td>TG102 กรุงเทพฯ (BKK) - เชียงใหม่ (CNX)</td></tr><tr><td>ออกเดินทาง</td><td>วันจันทร์ที่ 26 ตุลาคม 2569 เวลา 08:30 น.</td></tr><tr><td>ถึงปลายทาง</td><td>วันจันทร์ที่ 26 ตุลาคม 2569 เวลา 09:45 น.</td></tr></table><p>กรุณามาถึงสนามบินก่อนเวลาเดินทางอย่างน้อย 2 ชั่วโมง</p></body></html>"
+    "html": "<html><body><img src=\"data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNjAiIGhlaWdodD0iNDAiPjxyZWN0IHdpZHRoPSIxNjAiIGhlaWdodD0iNDAiIHJ4PSI4IiBmaWxsPSIjNGMxZDk1Ii8+PHRleHQgeD0iODAiIHk9IjI2IiBmb250LWZhbWlseT0iQXJpYWwiIGZvbnQtc2l6ZT0iMTYiIGZpbGw9IiNmZmYiIHRleHQtYW5jaG9yPSJtaWRkbGUiPkRlbW8gQWlyd2F5czwvdGV4dD48L3N2Zz4=\" alt=\"Demo Airways\" width=\"160\" height=\"40\"><h2>ยืนยันการจอง</h2><p>รหัสการจอง: ABC123</p><table><tr><td>เที่ยวบิน</td><td>TG102 กรุงเทพฯ (BKK) - เชียงใหม่ (CNX)</td></tr><tr><td>ออกเดินทาง</td><td>วันจันทร์ที่ 26 ตุลาคม 2569 เวลา 08:30 น.</td></tr><tr><td>ถึงปลายทาง</td><td>วันจันทร์ที่ 26 ตุลาคม 2569 เวลา 09:45 น.</td></tr></table><p>กรุณามาถึงสนามบินก่อนเวลาเดินทางอย่างน้อย 2 ชั่วโมง</p></body></html>"
   },
   {
     "id": "invite-1",
@@ -55,5 +71,21 @@
     "from": "ร้านค้าออนไลน์ <news@example-shop.com>",
     "subject": "โปรโมชันสิ้นเดือน ลดสูงสุด 70%",
     "text": "ช้อปเลย! สินค้าลดราคาสูงสุด 70% เฉพาะสิ้นเดือนนี้เท่านั้น พร้อมส่งฟรีทั่วประเทศ คลิกเพื่อดูสินค้าทั้งหมด หากไม่ต้องการรับข่าวสาร กดยกเลิกการรับอีเมล"
+  },
+  {
+    "id": "trip-1-invite",
+    "threadId": "trip",
+    "expected": "APPOINTMENT",
+    "from": "การ์ตูน <cartoon@example.com>",
+    "subject": "ไปเที่ยวภูสอยดาววันเสาร์",
+    "text": "พี่คะ วันเสาร์ที่ 24 ตุลาคม 2569 ไปเที่ยวภูสอยดาวกันไหมคะ ไปทั้งวันเลย"
+  },
+  {
+    "id": "meeting-1-request",
+    "threadId": "budget-meeting",
+    "expected": "APPOINTMENT",
+    "from": "อรทัย <orathai@example.com>",
+    "subject": "นัดประชุมทบทวนงบประมาณ",
+    "text": "เรียน คุณสมชาย\n\nขอนัดประชุมทบทวนงบประมาณในวันอังคารที่ 27 ตุลาคม 2569 เวลา 10:00 - 11:00 น. ที่ห้องประชุม 3 ค่ะ"
   }
 ]

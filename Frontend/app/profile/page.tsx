@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Image from "next/image";
 import { User, Mail, LogOut, Repeat, CheckCircle2, AlertTriangle } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
+import BackfillPanel from "@/components/profile/BackfillPanel";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/common/Feedback";
 import { useAuth } from "@/provider/AuthProvider";
@@ -23,6 +24,8 @@ function ProfileContent() {
       .then((data) => setAccounts(data.items))
       .catch(() => setAccounts([]));
   }, []);
+
+  const replaceAccount = useCallback((next: MailAccount) => setAccounts((list) => list.map((a) => (a.id === next.id ? next : a))), []);
 
   if (!user) return null;
 
@@ -94,6 +97,7 @@ function ProfileContent() {
                   เชื่อมบัญชีนี้ใหม่
                 </Button>
               )}
+              <BackfillPanel account={a} onChange={replaceAccount} />
             </div>
           ))}
           {accounts.length === 0 && <p className="text-xs text-slate-400">ยังไม่มีบัญชีอีเมลที่เชื่อม</p>}

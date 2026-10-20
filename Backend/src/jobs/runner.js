@@ -4,6 +4,7 @@ const { env } = require('../config/env');
 const { createLogger } = require('../utils/logger');
 const { runSyncJob } = require('./syncJob');
 const { runAnalyzeJob } = require('./analyzeJob');
+const { resumeBackfills } = require('./backfillJob');
 
 const startJobs = () => {
   const logger = createLogger('JOBS');
@@ -18,6 +19,7 @@ const startJobs = () => {
   });
   // เก็บงานที่ค้างจากรอบก่อนทันทีที่เซิร์ฟเวอร์เริ่ม
   runAnalyzeJob().catch(() => {});
+  resumeBackfills().catch((error) => logger.warn('BACKFILL_RESUME_FAILED', 'Could not resume backfill', { error: error.message }));
 };
 
 module.exports = { startJobs };

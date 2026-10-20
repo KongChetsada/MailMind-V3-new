@@ -1,15 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Cpu, Cloud, KeyRound, PlugZap, Trash2 } from "lucide-react";
+import { Bot, Cpu, Cloud, KeyRound, PlugZap, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { Notice, Spinner } from "@/components/common/Feedback";
 import { api, errorMessage } from "@/lib/api";
 import type { SettingsResponse } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import SettingsSection, { Field } from "./SettingsSection";
 
 interface Props {
   data: SettingsResponse;
@@ -26,6 +24,8 @@ export default function AiSettings({ data, onSaved }: Props) {
   const [message, setMessage] = useState<{ tone: "error" | "success"; text: string } | null>(null);
 
   const provider = data.providers.find((p) => p.id === providerId) || data.providers[0];
+  const active = data.providers.find((p) => p.id === data.setting.aiProvider);
+  const activeModel = data.setting.aiModel || active?.defaultModel || "ค่าเริ่มต้น";
   const dirty = providerId !== data.setting.aiProvider || (model || null) !== (data.setting.aiModel || null);
 
   const loadModels = useCallback(async (id: string) => {
@@ -88,113 +88,111 @@ export default function AiSettings({ data, onSaved }: Props) {
       return "บันทึกการตั้งค่า AI แล้ว";
     });
 
-  const toggleAuto = async (value: boolean) => {
-    try {
-      onSaved(await api.settings.update({ isAutoAnalyzeActive: value }));
-    } catch (e) {
-      setMessage({ tone: "error", text: errorMessage(e) });
-    }
-  };
+  const ProviderIcon = provider.isLocal ? Cpu : Cloud;
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
-        <div>
-          <p className="text-sm font-bold text-slate-800">วิเคราะห์อีเมลใหม่อัตโนมัติ</p>
-          <p className="text-xs text-slate-500">ปิดไว้ = อีเมลยังถูกดึงเข้ามา แต่จะวิเคราะห์เมื่อคุณกดเองทีละฉบับ</p>
-        </div>
-        <Switch checked={data.setting.isAutoAnalyzeActive} onCheckedChange={toggleAuto} />
-      </div>
-
-      <div>
-        <Label className="text-xs font-bold text-slate-600">ผู้ให้บริการ AI</Label>
-        <div className="mt-2 grid gap-2 sm:grid-cols-2">
-          {data.providers.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => selectProvider(p.id)}
-              className={cn(
-                "flex items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors",
-                p.id === providerId ? "border-blue-500 bg-blue-50/60 ring-2 ring-blue-500/15" : "border-slate-200 hover:bg-slate-50"
-              )}
+    <SettingsSection
+      icon={Bot}
+      title="ผู้ให้บริการ AI"
+      description={
+        <>
+          ใช้อยู่: <span className="font-semibold text-slate-700">{active?.label || data.setting.aiProvider}</span> · {activeModel}
+        </>
+      }
+      footer={
+        <>
+          <Button size="sm" variant="outline" onClick={test} disabled={busy !== null || (provider.requiresKey && !provider.hasKey && !apiKey)} className="rounded-xl bg-white text-xs">
+            {busy === "test" ? <Spinner className="mr-1.5 h-3 w-3" /> : <PlugZap className="mr-1.5 h-3.5 w-3.5" />}
+            ทดสอบการเชื่อมต่อ
+          </Button>
+          <Button size="sm" onClick={save} disabled={busy !== null || !dirty} className="ml-auto rounded-xl bg-blue-600 text-xs font-bold hover:bg-blue-700">
+            {busy === "save" && <Spinner className="mr-1.5 h-3 w-3" />} ใช้ผู้ให้บริการและโมเดลนี้
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-5">
+        <Field
+          label="ผู้ให้บริการ"
+          hint={
+            providerId !== data.setting.aiProvider
+              ? `ยังไม่ได้เปลี่ยน — ตอนนี้ใช้ ${active?.label || data.setting.aiProvider} อยู่ กด “ใช้ผู้ให้บริการและโมเดลนี้” ด้านล่างเพื่อเปลี่ยน`
+              : undefined
+          }
+        >
+          <div className="relative">
+            <ProviderIcon className={`pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 ${provider.isLocal ? "text-emerald-600" : "text-blue-600"}`} />
+            <select
+              value={providerId}
+              onChange={(e) => selectProvider(e.target.value)}
+              aria-label="ผู้ให้บริการ AI"
+              className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm font-semibold text-slate-800"
             >
-              {p.isLocal ? <Cpu className="h-4 w-4 text-emerald-600" /> : <Cloud className="h-4 w-4 text-blue-600" />}
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-bold text-slate-800">{p.label}</p>
-                <p className="text-[11px] text-slate-500">{p.isLocal ? "ประมวลผลในเครื่อง" : p.hasKey ? "มี API key แล้ว" : "ต้องใส่ API key"}</p>
-              </div>
-              {p.id === data.setting.aiProvider && <span className="rounded-md bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">ใช้อยู่</span>}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {provider.isLocal ? (
-        <Notice tone="success">เนื้อหาอีเมลถูกประมวลผลโดย Ollama บนเครื่องที่รัน Backend ไม่ถูกส่งให้ผู้ให้บริการ AI ภายนอก</Notice>
-      ) : (
-        <Notice tone="warn">
-          เมื่อเลือก {provider.label} เนื้อหาอีเมลที่วิเคราะห์และร่างตอบจะถูกส่งไปยังเซิร์ฟเวอร์ของผู้ให้บริการรายนี้ ตรวจนโยบายข้อมูลขององค์กรก่อนใช้กับอีเมลงาน
-        </Notice>
-      )}
-
-      {provider.requiresKey && (
-        <div>
-          <Label className="text-xs font-bold text-slate-600">API key ของ {provider.label}</Label>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <Input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={provider.hasKey ? "บันทึกไว้แล้ว — พิมพ์เพื่อเปลี่ยน" : "วาง API key"}
-              autoComplete="off"
-              className="h-9 min-w-[220px] flex-1 rounded-xl text-sm"
-            />
-            <Button size="sm" onClick={saveKey} disabled={busy !== null || apiKey.trim().length < 8} className="h-9 rounded-xl bg-slate-800 text-xs hover:bg-slate-900">
-              <KeyRound className="mr-1.5 h-3.5 w-3.5" /> บันทึก key
-            </Button>
-            {provider.hasKey && (
-              <Button size="sm" variant="ghost" onClick={deleteKey} disabled={busy !== null} className="h-9 rounded-xl text-xs text-rose-600">
-                <Trash2 className="mr-1.5 h-3.5 w-3.5" /> ลบ
-              </Button>
-            )}
+              {data.providers.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                  {p.isLocal ? " — ประมวลผลในเครื่อง" : p.hasKey ? " — มี API key แล้ว" : " — ต้องใส่ API key"}
+                  {p.id === data.setting.aiProvider ? " (ใช้อยู่)" : ""}
+                </option>
+              ))}
+            </select>
           </div>
-          <p className="mt-1 text-[11px] text-slate-400">key ถูกเข้ารหัสก่อนเก็บ และไม่ถูกส่งกลับมาที่หน้าเว็บอีก</p>
-        </div>
-      )}
+        </Field>
 
-      <div>
-        <Label className="text-xs font-bold text-slate-600">โมเดล</Label>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <Input
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            list="ai-models"
-            placeholder={provider.defaultModel ? `ค่าเริ่มต้น: ${provider.defaultModel}` : "ชื่อโมเดล"}
-            className="h-9 min-w-[220px] flex-1 rounded-xl text-sm"
-          />
-          <datalist id="ai-models">
-            {models.map((m) => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
-          {busy === "models" && <Spinner className="text-slate-400" />}
-        </div>
-        <p className="mt-1 text-[11px] text-slate-400">
-          {models.length > 0 ? `พบ ${models.length} โมเดล เลือกจากรายการหรือพิมพ์ชื่อเอง` : "พิมพ์ชื่อโมเดลตามที่ผู้ให้บริการกำหนด"}
-        </p>
+        {provider.isLocal ? (
+          <Notice tone="success">เนื้อหาอีเมลถูกประมวลผลโดย Ollama บนเครื่องที่รัน Backend ไม่ถูกส่งให้ผู้ให้บริการ AI ภายนอก</Notice>
+        ) : (
+          <Notice tone="warn">
+            เมื่อเลือก {provider.label} เนื้อหาอีเมลที่วิเคราะห์และร่างตอบจะถูกส่งไปยังเซิร์ฟเวอร์ของผู้ให้บริการรายนี้ ตรวจนโยบายข้อมูลขององค์กรก่อนใช้กับอีเมลงาน
+          </Notice>
+        )}
+
+        {provider.requiresKey && (
+          <Field label={`API key ของ ${provider.label}`} hint="key ถูกเข้ารหัสก่อนเก็บ และไม่ถูกส่งกลับมาที่หน้าเว็บอีก">
+            <div className="flex flex-wrap gap-2">
+              <Input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder={provider.hasKey ? "บันทึกไว้แล้ว — พิมพ์เพื่อเปลี่ยน" : "วาง API key"}
+                autoComplete="off"
+                className="h-10 min-w-[200px] flex-1 rounded-xl text-sm"
+              />
+              <Button size="sm" onClick={saveKey} disabled={busy !== null || apiKey.trim().length < 8} className="h-10 rounded-xl bg-slate-800 text-xs hover:bg-slate-900">
+                <KeyRound className="mr-1.5 h-3.5 w-3.5" /> บันทึก key
+              </Button>
+              {provider.hasKey && (
+                <Button size="sm" variant="ghost" onClick={deleteKey} disabled={busy !== null} className="h-10 rounded-xl text-xs text-rose-600 hover:bg-rose-50">
+                  <Trash2 className="mr-1.5 h-3.5 w-3.5" /> ลบ
+                </Button>
+              )}
+            </div>
+          </Field>
+        )}
+
+        <Field
+          label="โมเดล"
+          hint={models.length > 0 ? `พบ ${models.length} โมเดล เลือกจากรายการหรือพิมพ์ชื่อเอง` : "พิมพ์ชื่อโมเดลตามที่ผู้ให้บริการกำหนด"}
+        >
+          <div className="relative">
+            <Input
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              list="ai-models"
+              placeholder={provider.defaultModel ? `ค่าเริ่มต้น: ${provider.defaultModel}` : "ชื่อโมเดล"}
+              className="h-10 w-full rounded-xl pr-9 text-sm"
+            />
+            {busy === "models" && <Spinner className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />}
+            <datalist id="ai-models">
+              {models.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+          </div>
+        </Field>
+
+        {message && <Notice tone={message.tone}>{message.text}</Notice>}
       </div>
-
-      {message && <Notice tone={message.tone}>{message.text}</Notice>}
-
-      <div className="flex flex-wrap gap-2">
-        <Button size="sm" variant="outline" onClick={test} disabled={busy !== null || (provider.requiresKey && !provider.hasKey && !apiKey)} className="rounded-xl text-xs">
-          {busy === "test" ? <Spinner className="mr-1.5 h-3 w-3" /> : <PlugZap className="mr-1.5 h-3.5 w-3.5" />}
-          ทดสอบการเชื่อมต่อ
-        </Button>
-        <Button size="sm" onClick={save} disabled={busy !== null || !dirty} className="rounded-xl bg-blue-600 text-xs font-bold hover:bg-blue-700">
-          {busy === "save" && <Spinner className="mr-1.5 h-3 w-3" />} ใช้ผู้ให้บริการและโมเดลนี้
-        </Button>
-      </div>
-    </div>
+    </SettingsSection>
   );
 }

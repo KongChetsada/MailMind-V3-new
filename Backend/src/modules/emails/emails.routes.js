@@ -42,7 +42,8 @@ router.post('/sync', async (req, res) => {
     results.push(await syncAccount(account.id));
   }
   runAnalyzeJob().catch(() => {});
-  res.json({ results, created: results.reduce((sum, r) => sum + (r.created || 0), 0) });
+  const total = (key) => results.reduce((sum, r) => sum + (r[key] || 0), 0);
+  res.json({ results, created: total('created'), removed: total('removed'), restored: total('restored') });
 });
 
 // GET /api/emails/:id — รายละเอียด + เนื้อหาเธรด
@@ -85,6 +86,29 @@ router.post('/:id/draft', validate(draftBody), async (req, res) => {
     ? await saveManualDraft(req.user.id, req.params.id, body)
     : await generateDraft(req.params.id, { intent });
   res.json({ draft: emails.toDraftDto(draft) });
+});
+
+// รูปที่แสดงในหน้าเว็บได้ตรง ๆ (SVG มีสคริปต์ได้ จึงให้ดาวน์โหลดแทน)
+const PREVIEWABLE = /^image\/(jpeg|png|gif|webp|bmp)$/i;
+const attachmentParams = z.object({
+  messageId: z.string().regex(/^[\w-]{1,100}$/),
+  partId: z.string().regex(/^\d+(\.\d+)*$/),
+});
+
+// GET /api/emails/:id/attachments/:messageId/:partId — ไฟล์แนบของข้อความในเธรดของอีเมลนี้
+router.get('/:id/attachments/:messageId/:partId', async (req, res) => {
+  const params = attachmentParams.parse(req.params);
+  const file = await emails.getAttachmentFile(req.user.id, req.params.id, params.messageId, params.partId);
+  const inline = PREVIEWABLE.test(file.mimeType);
+  const filename = file.filename || 'attachment';
+  res.set({
+    'Content-Type': inline ? file.mimeType : 'application/octet-stream',
+    'Content-Length': String(file.data.length),
+    'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(filename)}`,
+    'X-Content-Type-Options': 'nosniff',
+    'Cache-Control': 'private, max-age=300',
+  });
+  res.send(file.data);
 });
 
 module.exports = router;

@@ -1,6 +1,6 @@
 // Prompt ทั้งหมดของระบบอยู่ในไฟล์นี้ — ไม่มีการเรียกโมเดลที่นี่
 const { CATEGORIES, PRIORITY_RULES } = require('../categories');
-const { offsetString, formatThaiDate } = require('../time');
+const { offsetString, formatThaiDate, formatThaiRange } = require('../time');
 
 const JSON_SYSTEM_PROMPT =
   'You are an executive assistant that analyses business emails. You MUST reply with one valid JSON object only, no extra text.';
@@ -11,7 +11,34 @@ const categoryLines = () =>
     .join('\n');
 
 /** ขั้นที่ 1: จำแนกประเภทและสกัดรายการที่ลงปฏิทินได้ */
-const buildAnalysisPrompt = ({ formattedThread, now = new Date(), timezone }) => {
+/** รายการเดิมในเธรด ในรูปแบบที่ AI อ้างถึงด้วยลำดับได้ */
+const existingItemsBlock = (existingItems, timezone) => {
+  if (!existingItems?.length) return '';
+  const lines = existingItems.map((item, i) => {
+    const when = !item.startAt
+      ? 'no date'
+      : item.isAllDay || !item.isTimeSpecified
+        ? `${formatThaiDate(item.startAt, timezone)} (all day / no time)`
+        : formatThaiRange(item.startAt, item.endAt, timezone);
+    const repeat = item.repeatDays > 1 ? ` (every day for ${item.repeatDays} days)` : '';
+    return `  #${i + 1} ${item.kind} "${item.title}" — ${when}${repeat}`;
+  });
+  return `
+ITEMS ALREADY RECORDED FROM EARLIER MESSAGES IN THIS THREAD
+${lines.join('\n')}
+- Do NOT output an item that merely repeats one of these with the same date and time.
+- If the latest message adds something new about one of them (a meeting point, a departure time, a room),
+  output it with "relatesTo": its number and "relation": "DETAIL", and give it a DIFFERENT, specific title
+  that says what the new item is (e.g. "ออกเดินทาง - นัดเจอที่หอ"), not the title above.
+- If the latest message explicitly MOVES one of them to another date or time ("ขอเลื่อนเป็น", "เปลี่ยนเป็น"),
+  output the new date/time with "relatesTo": its number and "relation": "RESCHEDULE".
+- If the latest message gives a clock time but NO date (e.g. "นัดรวมตัว 05.00 ที่หน้ามหาลัย") and it is about one of them,
+  it happens on that item's date (its FIRST day), NOT today. Use that date with the new time.
+- Otherwise "relatesTo" and "relation" are null.
+`;
+};
+
+const buildAnalysisPrompt = ({ formattedThread, now = new Date(), timezone, existingItems = [] }) => {
   const offset = offsetString(timezone, now);
   const todayIso = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, dateStyle: 'short' }).format(now);
   const weekday = new Intl.DateTimeFormat('en-US', { timeZone: timezone, weekday: 'long' }).format(now);
@@ -49,15 +76,21 @@ STEP 4 - needsReply and replyIntent
 STEP 5 - actionItems (things that could go on a calendar; may be empty, at most 5)
 - kind "EVENT": something that happens at a time (meeting, seminar, training, flight, hotel stay).
   A meeting time that is proposed, asked about ("สะดวกไหม"), confirmed, or rescheduled IS an EVENT — always extract it.
+  A plan or invitation for a specific DATE with no clock time (a day trip, "ไปทั้งวัน", "วันเสาร์นี้ไป...กันไหม") IS ALSO an EVENT:
+  put the date in "start" with 00:00:00, "isTimeSpecified": false, and "isAllDay": true if it lasts the whole day.
 - kind "DEADLINE": a due date for a task or document. Put the due date in "start", "end" must be null.
 - "start"/"end": ISO 8601 with offset. Use null when the email does not say. NEVER invent a date or time.
 - "isTimeSpecified": true only if the email states a clock time. If only a date is given, set false and use 00:00:00 in "start".
 - "isAllDay": true only for events that explicitly last whole days.
+- A DATE RANGE such as "15/10/2569 - 17/10/2569" or "15-17 ตุลาคม" is ONE multi-day event: "start" = first day 00:00:00,
+  "end" = LAST day 00:00:00, "isAllDay": true, "isTimeSpecified": false. Do not shorten it to the first day.
+- Several days WITH daily hours (e.g. "21-22 ตุลาคม เวลา 09.00 - 15.00 ทั้ง 2 วัน") is also ONE event:
+  "start" = FIRST day at the start time, "end" = LAST day at the end time, "isTimeSpecified": true.
 - "end": if the email gives an end time or a duration, compute it; otherwise null.
 - "location": room, address, or online platform/link; null if absent.
 - "evidence": copy the EXACT phrase from the email (max 150 characters) that states this date/time. Do not paraphrase.
 - "title": short THAI title for the calendar entry.
-
+${existingItemsBlock(existingItems, timezone)}
 EMAIL THREAD
 """
 ${formattedThread}
@@ -79,7 +112,9 @@ Return exactly this JSON shape:
       "isAllDay": false,
       "isTimeSpecified": true,
       "location": "string or null",
-      "evidence": "exact phrase from the email"
+      "evidence": "exact phrase from the email",
+      "relatesTo": null,
+      "relation": null
     }
   ]
 }

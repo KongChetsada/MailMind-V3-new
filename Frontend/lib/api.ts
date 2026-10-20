@@ -2,6 +2,7 @@
 import type {
   ActionItem,
   CalendarEvent,
+  ConfirmMode,
   EmailCategory,
   EmailCounts,
   EmailDetail,
@@ -80,19 +81,42 @@ async function request<T>(path: string, { method = "GET", body, query }: Options
   return data as T;
 }
 
+async function requestBlob(path: string): Promise<Blob> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      headers: tokenStore.get() ? { Authorization: `Bearer ${tokenStore.get()}` } : {},
+    });
+  } catch {
+    throw new ApiError(0, "NETWORK", "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้");
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new ApiError(res.status, data?.code || "ERROR", data?.error || "ดึงไฟล์ไม่สำเร็จ");
+  }
+  return res.blob();
+}
+
 export const api = {
   me: () => request<{ user: UserProfile }>("/api/user/me"),
   accounts: () => request<{ items: MailAccount[] }>("/api/accounts"),
+  backfill: {
+    start: (accountId: string) => request<{ account: MailAccount }>(`/api/accounts/${accountId}/backfill`, { method: "POST" }),
+    stop: (accountId: string) => request<{ account: MailAccount }>(`/api/accounts/${accountId}/backfill/stop`, { method: "POST" }),
+  },
 
   emails: {
     list: (params: { category?: EmailCategory; filter?: EmailFilter; q?: string; cursor?: string | null }) =>
       request<{ items: EmailListItem[]; nextCursor: string | null }>("/api/emails", { query: params }),
     counts: () => request<EmailCounts>("/api/emails/counts"),
     get: (id: string) => request<EmailDetail>(`/api/emails/${id}`),
+    /** ไฟล์แนบเป็น Blob (ต้องแนบ token จึงใช้ <img src> ตรง ๆ ไม่ได้) */
+    attachment: (id: string, messageId: string, partId: string) =>
+      requestBlob(`/api/emails/${id}/attachments/${encodeURIComponent(messageId)}/${encodeURIComponent(partId)}`),
     update: (id: string, body: { userCategory?: EmailCategory; isRead?: true }) =>
       request<EmailDetail>(`/api/emails/${id}`, { method: "PATCH", body }),
     analyze: (id: string) => request<EmailDetail>(`/api/emails/${id}/analyze`, { method: "POST" }),
-    sync: () => request<{ created: number }>("/api/emails/sync", { method: "POST" }),
+    sync: () => request<{ created: number; removed: number; restored: number }>("/api/emails/sync", { method: "POST" }),
     createDraft: (id: string, body: { intent?: ReplyIntent; body?: string }) =>
       request<{ draft: ReplyDraft }>(`/api/emails/${id}/draft`, { method: "POST", body }),
   },
@@ -109,9 +133,9 @@ export const api = {
       request<{ items: ActionItem[] }>("/api/actions", { query: { status } }),
     update: (
       id: string,
-      body: Partial<{ title: string; startAt: string | null; endAt: string | null; isAllDay: boolean; location: string | null }>
+      body: Partial<{ title: string; startAt: string | null; endAt: string | null; isAllDay: boolean; location: string | null; repeatDays: number }>
     ) => request<{ action: ActionItem }>(`/api/actions/${id}`, { method: "PUT", body }),
-    confirm: (id: string, body: { force?: boolean; inviteSender?: boolean }) =>
+    confirm: (id: string, body: { force?: boolean; inviteSender?: boolean; mode?: ConfirmMode }) =>
       request<{ action: ActionItem }>(`/api/actions/${id}/confirm`, { method: "POST", body }),
     dismiss: (id: string) => request<{ action: ActionItem }>(`/api/actions/${id}/dismiss`, { method: "POST" }),
   },

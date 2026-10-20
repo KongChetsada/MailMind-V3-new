@@ -50,7 +50,7 @@ const TZ = arg('tz', 'Asia/Bangkok');
       const ms = Date.now() - started;
       durations.push(ms);
       const { value, strategy } = parseJsonFromLlm(res.text);
-      const result = validateAnalysis(value, { plainText, timezone: TZ, now });
+      const result = validateAnalysis(value, { plainText, timezone: TZ, now, fallbackTitle: sample.subject });
       const ok = !sample.expected || result.category === sample.expected;
       if (ok) correct += 1;
 
@@ -61,8 +61,8 @@ const TZ = arg('tz', 'Asia/Bangkok');
         const when = !item.startAt
           ? '(ไม่มีวันที่)'
           : item.isTimeSpecified
-            ? formatThaiRange(item.startAt, item.endAt, TZ)
-            : formatThaiDate(item.startAt, TZ);
+            ? `${formatThaiRange(item.startAt, item.endAt, TZ)}${item.repeatDays > 1 ? ` · ทุกวัน รวม ${item.repeatDays} วัน` : ''}`
+            : `${formatThaiDate(item.startAt, TZ)}${item.endAt ? ` ถึง ${formatThaiDate(item.endAt, TZ)}` : ''}${item.isAllDay ? ' (ทั้งวัน)' : ''}`;
         const flags = item.missingFields.length ? `  [ขาด: ${item.missingFields.join(', ')}]` : '';
         console.log(`       - ${item.kind} ${item.title} | ${when}${item.location ? ` | ${item.location}` : ''}${flags}`);
       }

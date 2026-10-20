@@ -1,16 +1,21 @@
 // ขั้น (B) วิเคราะห์อีเมลหนึ่งฉบับ: จำแนก → สกัด → ตรวจผลลัพธ์ → ตรวจตาราง → (ร่างตอบกลับ)
 const { getDeps } = require('./deps');
-const { formatThreadForAi } = require('../utils/emailText');
+const { formatThreadForAi, messagePlainText, stripQuotedText } = require('../utils/emailText');
 const { JSON_SYSTEM_PROMPT, buildAnalysisPrompt } = require('../core/analysis/prompts');
 const { parseJsonFromLlm } = require('../core/analysis/parse');
 const { validateAnalysis } = require('../core/analysis/validate');
 const { getCategoryPolicy } = require('../core/categories');
 const { normalizeTimeZone } = require('../core/time');
 const { evaluateAvailability } = require('./availability');
+const { linkToExisting } = require('../core/threadLinking');
 const { generateDraft } = require('./generateDraft');
+const { notifyAppointment } = require('./notifyAppointment');
 
 const CLAIMABLE = ['PENDING', 'FAILED'];
-const CLAIMABLE_FORCED = ['PENDING', 'FAILED', 'DONE', 'SKIPPED'];
+// ผู้ใช้กดเอง: วิเคราะห์ได้ทุกสถานะที่ไม่ได้กำลังทำงานอยู่ รวมอีเมลย้อนหลัง (MANUAL)
+const CLAIMABLE_FORCED = ['PENDING', 'FAILED', 'DONE', 'SKIPPED', 'MANUAL'];
+// รายการเดิมในเธรดที่ยังมีผล (ใช้ผูกกับรายการใหม่)
+const LIVE_ITEM_STATUSES = ['SUGGESTED', 'CREATING', 'CREATED'];
 // รายการที่ผู้ใช้ยังไม่ได้ลงปฏิทิน ถูกแทนที่เมื่อวิเคราะห์ใหม่
 const REPLACEABLE_ITEM_STATUSES = ['SUGGESTED', 'FAILED', 'DISMISSED'];
 
@@ -55,9 +60,27 @@ const analyzeEmail = async (emailId, options = {}, deps = getDeps()) => {
       formattedThread = `[SINGLE EMAIL MESSAGE]\nFrom: ${email.fromAddress || ''}\nSubject: ${email.subject || ''}\nContent:\n${email.snippet || ''}`;
     }
 
+    // รายการจากอีเมลฉบับก่อนหน้าในเธรดเดียวกัน: ให้ AI เห็นเพื่อไม่สกัดซ้ำ และใช้ผูกด้วยกฎหลังได้ผลลัพธ์
+    const existingItems = await prisma.actionItem.findMany({
+      where: {
+        status: { in: LIVE_ITEM_STATUSES },
+        email: {
+          mailAccountId: account.id,
+          providerThreadId: email.providerThreadId,
+          id: { not: emailId },
+          receivedAt: { lte: email.receivedAt },
+        },
+      },
+      orderBy: [{ startAt: 'asc' }, { createdAt: 'asc' }],
+      take: 10,
+    });
+
+    // วันอ้างอิงของคำว่า "พรุ่งนี้" "วันศุกร์นี้" คือวันที่ได้รับอีเมล ไม่ใช่วันที่ระบบวิเคราะห์
+    const referenceDate = email.receivedAt;
+
     const response = await ai.complete({
       system: JSON_SYSTEM_PROMPT,
-      user: buildAnalysisPrompt({ formattedThread, now: now(), timezone }),
+      user: buildAnalysisPrompt({ formattedThread, now: referenceDate, timezone, existingItems }),
       temperature: 0.1,
       json: true,
     });
@@ -65,15 +88,22 @@ const analyzeEmail = async (emailId, options = {}, deps = getDeps()) => {
     if (strategy !== 'direct') {
       logger.sensitiveBlock('ANALYSIS_RAW_RESPONSE', 'AI ANALYSIS RAW RESPONSE', String(response.text).slice(0, 1500));
     }
-    const result = validateAnalysis(value, { plainText, timezone, now: now() });
+    const result = validateAnalysis(value, { plainText, timezone, now: referenceDate, fallbackTitle: email.subject });
     const policy = getCategoryPolicy(result.category);
 
     let calendar = null;
     if (policy.calendarMode !== 'NONE' && result.actionItems.some((i) => i.kind === 'EVENT')) {
+      // (ตัวเชื่อมถูกสร้างก่อนผูกรายการ เพราะการผูกไม่ขึ้นกับปฏิทิน)
       calendar = getCalendar(account);
     }
+    // ข้อความล่าสุด (ตัดส่วนที่อ้างถึงฉบับก่อน) ใช้หาคำว่าเลื่อน/เปลี่ยน
+    const latestText = thread.length ? stripQuotedText(messagePlainText(thread[thread.length - 1])) : email.snippet || '';
+    const linkedItems = linkToExisting({ items: result.actionItems, existing: existingItems, timezone, latestText, referenceDate }).map((item) => ({
+      ...item,
+      ignoreEventId: existingItems.find((old) => old.id === item.relatedActionId)?.externalEventId || null,
+    }));
     const items = await evaluateAvailability({
-      items: result.actionItems,
+      items: linkedItems,
       mode: policy.calendarMode,
       calendar,
       settings,
@@ -107,12 +137,15 @@ const analyzeEmail = async (emailId, options = {}, deps = getDeps()) => {
           endAt: item.endAt,
           isAllDay: item.isAllDay,
           isTimeSpecified: item.isTimeSpecified,
+          repeatDays: item.repeatDays || 1,
           location: item.location,
           evidence: item.evidence,
           missingFields: item.missingFields,
           availability: item.availability,
           availabilityReason: item.availabilityReason,
           suggestedSlots: item.suggestedSlots ?? undefined,
+          relatedActionId: item.relatedActionId,
+          relation: item.relation,
         })),
       }),
     ]);
@@ -126,6 +159,7 @@ const analyzeEmail = async (emailId, options = {}, deps = getDeps()) => {
       priority: result.priority,
       needsReply: result.needsReply,
       actionItems: items.length,
+      linkedToThread: items.filter((i) => i.relatedActionId).length,
       usage: response.usage,
     });
 
@@ -136,6 +170,13 @@ const analyzeEmail = async (emailId, options = {}, deps = getDeps()) => {
       } catch (draftError) {
         logger.warn('AUTO_DRAFT_FAILED', 'Automatic draft generation failed', { error: draftError.message });
       }
+    }
+
+    // แจ้งเตือนทางอีเมล (หลังร่างตอบ เพื่อบอกได้ว่ามีร่างรออยู่) — ล้มเหลวได้โดยผลวิเคราะห์ยังอยู่
+    try {
+      await notifyAppointment(emailId, deps);
+    } catch (notifyError) {
+      logger.warn('NOTIFY_FAILED', 'Appointment notification failed', { error: notifyError.message });
     }
 
     return { claimed: true, ok: true, category: result.category };

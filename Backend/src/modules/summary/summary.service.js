@@ -26,17 +26,30 @@ const getPeriod = (type, now, tz) => {
 
 /** ข้อความรายการกิจกรรม (markdown) จากข้อมูลจริง */
 const buildScheduleSections = ({ calendarEvents, pendingItems, tz }) => {
-  const when = (startAt, endAt, dateOnly) =>
-    dateOnly
-      ? `${formatThaiDate(new Date(startAt), tz)} (ทั้งวัน)`
-      : formatThaiRange(new Date(startAt), endAt ? new Date(endAt) : null, tz);
+  // lastDay: วันสุดท้ายของกิจกรรมทั้งวัน (รวม) — หลายวันแสดงเป็นช่วง
+  const allDay = (startAt, lastDay) => {
+    const first = formatThaiDate(new Date(startAt), tz);
+    const last = lastDay ? formatThaiDate(new Date(lastDay), tz) : first;
+    return first === last ? `${first} (ทั้งวัน)` : `${first} ถึง ${last} (ทั้งวัน)`;
+  };
+  const timed = (startAt, endAt) => formatThaiRange(new Date(startAt), endAt ? new Date(endAt) : null, tz);
+  // กิจกรรมทั้งวันจากปฏิทินมาเป็นวันที่ล้วน และวันสิ้นสุดเป็นแบบไม่รวม จึงถอยหนึ่งวัน
+  const calendarWhen = (e) => {
+    if (!e.isAllDay) return timed(e.start, e.end);
+    const exclusive = e.end && String(e.end).length === 10;
+    return allDay(e.start, e.end ? new Date(new Date(e.end).getTime() - (exclusive ? 86400000 : 0)) : null);
+  };
+  const itemWhen = (a) =>
+    a.isAllDay || !a.isTimeSpecified
+      ? allDay(a.startAt, a.endAt)
+      : `${timed(a.startAt, a.endAt)}${a.repeatDays > 1 ? ` (ทุกวัน รวม ${a.repeatDays} วัน)` : ''}`;
 
   const eventLines = calendarEvents.map(
-    (e) => `- ${when(e.start, e.end, e.isAllDay)} — ${e.title}${e.location ? ` (${e.location})` : ''}`
+    (e) => `- ${calendarWhen(e)} — ${e.title}${e.location ? ` (${e.location})` : ''}`
   );
   const pendingLines = pendingItems.map(
     (a) =>
-      `- ${when(a.startAt, a.endAt, a.isAllDay || !a.isTimeSpecified)} — ${a.kind === 'DEADLINE' ? '[กำหนดส่ง] ' : ''}${a.title}`
+      `- ${itemWhen(a)} — ${a.kind === 'DEADLINE' ? '[กำหนดส่ง] ' : ''}${a.title}`
   );
 
   const lines = ['## ในปฏิทิน', ...(eventLines.length ? eventLines : ['- ไม่มีกิจกรรมที่บันทึกไว้'])];
@@ -68,7 +81,7 @@ const getOrGenerateSummary = async (userId, type, force) => {
   const account = await requireActiveAccount(userId);
   const calendarEvents = await getCalendar(account).listEvents({ timeMin: start, timeMax: end });
   const pendingItems = await prisma.actionItem.findMany({
-    where: { status: 'SUGGESTED', startAt: { gte: start, lt: end }, email: { mailAccount: { userId } } },
+    where: { status: 'SUGGESTED', startAt: { gte: start, lt: end }, email: { mailAccount: { userId }, removedAt: null } },
     orderBy: { startAt: 'asc' },
     take: 50,
   });

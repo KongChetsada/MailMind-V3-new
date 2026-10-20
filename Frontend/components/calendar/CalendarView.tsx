@@ -9,11 +9,11 @@ import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/common/Feedback";
 import { api, errorMessage } from "@/lib/api";
 import { formatWhen } from "@/lib/format";
+import { coversDay, formatSpan, toSpan, toSpans } from "@/lib/calendarRange";
 import type { ActionItem, CalendarEvent } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const WEEKDAYS = ["จ", "อ", "พ", "พฤ", "ศ", "ส", "อา"];
-const timeOf = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", hour12: false }) : "");
 
 /** ปฏิทินรายเดือน: กิจกรรมจากผู้ให้บริการ (เขียว) และรายการจากอีเมลที่รอยืนยัน (เหลือง) */
 export default function CalendarView() {
@@ -46,8 +46,18 @@ export default function CalendarView() {
     return list;
   }, [month]);
 
-  const eventsOn = (day: Date) => events.filter((e) => e.start && isSameDay(new Date(e.start), day));
-  const pendingOn = (day: Date) => pending.filter((a) => a.startAt && isSameDay(new Date(a.startAt), day));
+  // คำนวณช่วงเวลาครั้งเดียว: กิจกรรมหลายวันแสดงในทุกวันที่ครอบคลุม
+  const eventSpans = useMemo(() => events.map((event) => ({ event, span: toSpan(event) })), [events]);
+  const pendingSpans = useMemo(
+    () =>
+      pending.map((item) => ({
+        item,
+        spans: toSpans({ start: item.startAt, end: item.endAt, isAllDay: item.isAllDay || !item.isTimeSpecified, repeatDays: item.repeatDays }),
+      })),
+    [pending]
+  );
+  const eventsOn = (day: Date) => eventSpans.filter(({ span }) => coversDay(span, day));
+  const pendingOn = (day: Date) => pendingSpans.filter(({ spans }) => spans.some((span) => coversDay(span, day))).map(({ item }) => item);
   const today = new Date();
   const dayEvents = eventsOn(selected);
   const dayPending = pendingOn(selected);
@@ -127,7 +137,7 @@ export default function CalendarView() {
                       {a.title}
                     </span>
                   ))}
-                  {ev.slice(0, pe.length > 0 ? 1 : 2).map((e) => (
+                  {ev.slice(0, pe.length > 0 ? 1 : 2).map(({ event: e }) => (
                     <span key={e.id} className="truncate rounded-md border border-emerald-100 bg-emerald-50 px-1 text-[10px] font-bold text-emerald-700">
                       {e.title}
                     </span>
@@ -166,12 +176,12 @@ export default function CalendarView() {
           {dayEvents.length === 0 ? (
             <p className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 py-8 text-center text-xs text-slate-400">ไม่มีกิจกรรมในวันนี้</p>
           ) : (
-            dayEvents.map((e) => (
+            dayEvents.map(({ event: e, span }) => (
               <div key={e.id} className="space-y-1.5 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-3">
                 <p className="text-sm font-bold text-slate-900">{e.title}</p>
                 <p className="flex items-center gap-1.5 text-xs text-slate-500">
                   <Clock className="h-3.5 w-3.5 text-slate-400" />
-                  {e.isAllDay ? "ทั้งวัน" : `${timeOf(e.start)} – ${timeOf(e.end)} น.`}
+                  {span ? formatSpan(span) : ""}
                 </p>
                 {e.location && (
                   <p className="flex items-center gap-1.5 truncate text-xs text-slate-500">

@@ -32,6 +32,15 @@ const PROVIDERS = Object.freeze({
     defaultModel: null,
     timeoutMs: 60_000,
   },
+  intelsphere: {
+    label: 'KKU IntelSphere',
+    baseUrl: 'https://gen.ai.kku.ac.th/api/v1',
+    requiresKey: true,
+    isLocal: false,
+    jsonMode: false, // ยังไม่ได้ยืนยันว่ารองรับ response_format — ระบบแกะ JSON จากข้อความเองได้
+    defaultModel: 'deepseek-v4-pro',
+    timeoutMs: 60_000,
+  },
   openrouter: {
     label: 'OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1',
